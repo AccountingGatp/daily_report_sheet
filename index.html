@@ -1,0 +1,680 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Saint Daily Reporting</title>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
+<script src="js/sales-engine.js"></script>
+<script src="js/daily-engine.js"></script>
+<script src="js/report-export.js"></script>
+<script>
+  /* ================================================================
+     LINKS TO THE OTHER SAINT TOOLS — paste your current URLs here.
+     Leave a value empty ('') and the SOP shows the tool name without a link.
+     ================================================================ */
+  window.TOOL_LINKS = {
+    cogs: 'https://cogs-app.vercel.app/',                 // SAINT COGS tool (supplier COGS Excel)
+    merchant: 'https://merchant-fee-app.vercel.app/',     // Saint Merchant (merchant fee reconciliation)
+    sales: 'https://saintsalesautomation.vercel.app/'     // SaintEyewear Sales Journal (sales reconciliation)
+  };
+</script>
+<style>
+:root{
+  --bg:#f4f5f7;--card:#fff;--ink:#1b1f27;--muted:#626a78;--faint:#8b93a1;--line:#e2e5ea;--line2:#eef0f3;
+  --accent:#1f4fd1;--accent-ink:#fff;--accent-soft:#eaf0ff;
+  --ok:#157a4f;--ok-soft:#e6f5ee;--warn:#9a6200;--warn-soft:#fff5dd;--err:#b42318;--err-soft:#fdecea;
+  --radius:12px;--shadow:0 1px 2px rgba(16,24,40,.05);
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,Arial,sans-serif;background:var(--bg);color:var(--ink)}
+button,input{font:inherit}
+a{color:var(--accent)}
+.hidden{display:none!important}
+
+/* top bar */
+.top{position:sticky;top:0;z-index:20;background:#fff;border-bottom:1px solid var(--line)}
+.top-in{max-width:1120px;margin:0 auto;padding:12px 20px;display:flex;align-items:center;gap:16px}
+.brand{font-weight:750;font-size:16px;letter-spacing:.2px}
+.brand small{display:block;font-weight:500;font-size:12px;color:var(--muted)}
+.top .spacer{flex:1}
+.progress-pill{font-size:12px;color:var(--muted);background:var(--line2);padding:5px 10px;border-radius:999px;white-space:nowrap}
+.btn{border:1px solid transparent;border-radius:9px;padding:9px 14px;font-weight:650;cursor:pointer;display:inline-flex;align-items:center;gap:8px;white-space:nowrap}
+.btn-primary{background:var(--accent);color:var(--accent-ink)}
+.btn-primary:hover{filter:brightness(1.08)}
+.btn-primary:disabled{background:#b8c2d6;cursor:not-allowed;filter:none}
+.btn-ghost{background:#fff;border-color:var(--line);color:var(--ink)}
+.btn-ghost:hover{background:var(--line2)}
+.btn-sop{background:var(--accent-soft);color:var(--accent);border-color:#cfdcff}
+.btn-sm{padding:6px 10px;font-size:13px;border-radius:8px}
+.link-btn{background:none;border:0;color:var(--accent);cursor:pointer;padding:0;font-weight:600;font-size:13px}
+
+/* intro */
+.wrap{max-width:1120px;margin:0 auto;padding:22px 20px 60px}
+.intro{display:flex;gap:18px;align-items:center;justify-content:space-between;background:#fff;border:1px solid var(--line);border-radius:var(--radius);padding:18px 20px;margin-bottom:16px}
+.intro h1{font-size:20px;margin:0 0 4px}
+.intro p{margin:0;color:var(--muted);max-width:640px}
+.steps-mini{display:flex;gap:6px;flex-wrap:wrap;margin-top:12px}
+.steps-mini span{font-size:12px;background:var(--line2);border-radius:999px;padding:4px 10px;color:#394150}
+.steps-mini b{color:var(--accent)}
+
+/* cards */
+.card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:20px;margin:0 0 16px;box-shadow:var(--shadow)}
+.card-h{display:flex;align-items:flex-start;gap:12px;margin-bottom:14px}
+.num{flex:none;width:26px;height:26px;border-radius:50%;background:var(--accent);color:#fff;display:grid;place-items:center;font-weight:700;font-size:13px}
+.card-h h2{font-size:16px;margin:1px 0 2px}
+.card-h p{margin:0;color:var(--muted);font-size:13px}
+.card-h .right{margin-left:auto;display:flex;gap:8px;flex:none}
+
+/* period */
+.period{display:flex;gap:14px;align-items:flex-end;flex-wrap:wrap}
+.field label{display:block;font-size:12px;font-weight:650;color:var(--muted);margin-bottom:5px}
+.field input{padding:9px 11px;border:1px solid var(--line);border-radius:9px;background:#fff;min-width:170px}
+.period .hint{color:var(--muted);font-size:13px;padding-bottom:9px}
+
+/* uploads */
+.dropall{border:1.5px dashed #c5ccd8;border-radius:10px;padding:14px;text-align:center;color:var(--muted);margin-bottom:14px;transition:.15s}
+.dropall.drag{border-color:var(--accent);background:var(--accent-soft);color:var(--accent)}
+.uploads{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+.up{border:1px solid var(--line);border-radius:10px;padding:14px;display:flex;flex-direction:column;gap:8px;min-height:150px;transition:.15s;background:#fff}
+.up.drag{border-color:var(--accent);background:var(--accent-soft)}
+.up.ok{border-color:#b9e0cc}
+.up.bad{border-color:#f1b5ae}
+.up-top{display:flex;align-items:center;gap:8px}
+.up-top strong{font-size:14px;line-height:1.25}
+.up-top .fmt,.up-top .state{flex:none}
+.fmt{font-size:11px;font-weight:650;color:#4b5565;background:var(--line2);border-radius:6px;padding:2px 7px}
+.state{margin-left:auto;font-size:12px;font-weight:650}
+.state.ok{color:var(--ok)}.state.bad{color:var(--err)}.state.wait{color:var(--faint)}.state.busy{color:var(--accent)}
+.up .src{font-size:12.5px;color:var(--muted);margin:0}
+.up .file{font-size:12.5px;background:var(--line2);border-radius:7px;padding:6px 8px;word-break:break-all}
+.up .file.err{background:var(--err-soft);color:var(--err)}
+.up .acts{margin-top:auto;display:flex;align-items:center;gap:10px}
+.up input[type=file]{display:none}
+
+/* ad spend */
+.tbl-wrap{overflow:auto;border:1px solid var(--line);border-radius:10px}
+table{border-collapse:collapse;width:100%;font-size:13px}
+th,td{padding:7px 10px;border-bottom:1px solid var(--line2);text-align:right;white-space:nowrap}
+th{background:#f8f9fb;font-weight:650;color:#3a4150;font-size:12px}
+th:first-child,td:first-child{text-align:left;position:sticky;left:0;background:inherit}
+tbody tr{background:#fff}
+tr.sub td{font-weight:700;background:#f8f9fb}
+.ad input{width:100px;padding:6px 8px;border:1px solid var(--line);border-radius:7px;text-align:right}
+.ad input:focus,.field input:focus,.cogsfix input:focus{outline:2px solid #c9d7ff;border-color:var(--accent)}
+.muted{color:var(--muted)}
+.small{font-size:12.5px}
+
+/* overview */
+.summary{display:flex;align-items:center;gap:12px;padding:12px 14px;border-radius:10px;margin-bottom:14px;font-weight:600}
+.summary.ok{background:var(--ok-soft);color:var(--ok)}
+.summary.warn{background:var(--warn-soft);color:var(--warn)}
+.summary.err{background:var(--err-soft);color:var(--err)}
+.summary.idle{background:var(--line2);color:var(--muted)}
+.cov td,.cov th{text-align:center}
+.cov td:first-child{text-align:left;font-weight:600}
+.dot{display:inline-grid;place-items:center;width:22px;height:22px;border-radius:50%;font-size:12px;font-weight:800;cursor:default}
+.dot.ok{background:var(--ok-soft);color:var(--ok)}
+.dot.review{background:var(--warn-soft);color:var(--warn)}
+.dot.gap{background:var(--err-soft);color:var(--err)}
+.dot.info{background:var(--accent-soft);color:var(--accent)}
+.legend{display:flex;gap:14px;font-size:12px;color:var(--muted);margin:10px 0 0}
+.issues{list-style:none;margin:14px 0 0;padding:0;display:grid;gap:6px}
+.issues li{padding:8px 12px;border-radius:8px;font-size:13px;display:flex;gap:10px}
+.issues li b{flex:none;min-width:150px}
+.issues li.ERROR{background:var(--err-soft)}
+.issues li.REVIEW{background:var(--warn-soft)}
+.issues li.INFO{background:var(--accent-soft)}
+.cogsfix{margin-top:14px;border:1px solid #f0d99a;background:#fffbee;border-radius:10px;padding:12px 14px}
+.cogsfix h3{margin:0 0 4px;font-size:14px}
+.cogsfix input{width:110px;padding:6px 8px;border:1px solid var(--line);border-radius:7px;text-align:right}
+
+/* results */
+.kpis{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px;margin-bottom:14px}
+.kpi{border:1px solid var(--line);border-radius:10px;padding:12px}
+.kpi .k{font-size:12px;color:var(--muted)}
+.kpi .v{font-size:18px;font-weight:750;margin-top:3px;font-variant-numeric:tabular-nums}
+.neg{color:var(--err)}
+.preview td{font-variant-numeric:tabular-nums}
+.preview tr.hl td{font-weight:700;background:#f3f6ff}
+.preview tr.sec td{background:#f8f9fb;color:var(--muted);font-size:11.5px;font-weight:700;text-transform:uppercase;letter-spacing:.4px}
+.dl-row{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-top:16px}
+
+/* SOP drawer */
+.scrim{position:fixed;inset:0;background:rgba(15,20,30,.38);z-index:40;opacity:0;pointer-events:none;transition:.2s}
+.scrim.open{opacity:1;pointer-events:auto}
+.drawer{position:fixed;top:0;right:0;bottom:0;width:min(720px,100%);background:#fff;z-index:50;transform:translateX(100%);transition:transform .25s ease;display:flex;flex-direction:column;box-shadow:-10px 0 30px rgba(0,0,0,.12)}
+.drawer.open{transform:none}
+.drawer-h{display:flex;align-items:center;gap:12px;padding:14px 20px;border-bottom:1px solid var(--line)}
+.drawer-h h2{margin:0;font-size:17px}
+.drawer-h .spacer{flex:1}
+.drawer-nav{display:flex;gap:6px;flex-wrap:wrap;padding:10px 20px;border-bottom:1px solid var(--line);background:#fafbfc}
+.drawer-nav a{font-size:12.5px;text-decoration:none;background:#fff;border:1px solid var(--line);color:#394150;border-radius:999px;padding:4px 10px}
+.drawer-nav a:hover{border-color:var(--accent);color:var(--accent)}
+.drawer-body{overflow:auto;padding:4px 20px 40px}
+.sop h3{font-size:15px;margin:22px 0 8px}
+.sop ol{margin:0;padding-left:20px}
+.sop li{margin:4px 0}
+.sop .src-card{border:1px solid var(--line);border-radius:10px;padding:14px 16px;margin:12px 0;scroll-margin-top:12px}
+.sop .src-card h4{margin:0 0 2px;font-size:15px;display:flex;gap:8px;align-items:center}
+.sop .where{background:var(--line2);border-radius:8px;padding:8px 10px;margin:8px 0;font-size:13px}
+.sop .tip{font-size:12.5px;color:var(--warn);background:var(--warn-soft);border-radius:8px;padding:7px 10px;margin-top:8px}
+.sop .tool{font-weight:650}
+.sop table td,.sop table th{text-align:left;white-space:normal}
+
+@media (max-width:900px){.uploads{grid-template-columns:repeat(2,minmax(0,1fr))}.kpis{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (max-width:600px){.uploads{grid-template-columns:1fr}.intro{flex-direction:column;align-items:flex-start}.progress-pill{display:none}.issues li{flex-direction:column;gap:2px}}
+</style>
+</head>
+<body>
+
+<header class="top">
+  <div class="top-in">
+    <div class="brand">Saint Daily<small>Daily reporting workbook</small></div>
+    <div class="spacer"></div>
+    <span class="progress-pill" id="progressPill">0 of 6 files</span>
+    <button class="btn btn-sop" id="openSop" type="button">📘 View SOP</button>
+  </div>
+</header>
+
+<main class="wrap">
+  <section class="intro">
+    <div>
+      <h1>Build the daily report</h1>
+      <p>Pick the dates, upload the six source files for those same dates, add ad spend, then download the Excel report. Not sure where a file comes from? Open the SOP.</p>
+      <div class="steps-mini"><span><b>1</b> Period</span><span><b>2</b> Upload 6 files</span><span><b>3</b> Ad spend</span><span><b>4</b> Check</span><span><b>5</b> Download</span></div>
+    </div>
+    <button class="btn btn-primary" id="openSop2" type="button">View SOP &amp; file sources</button>
+  </section>
+
+  <!-- 1. Period -->
+  <section class="card">
+    <div class="card-h"><div class="num">1</div><div><h2>Report period</h2><p>Every file you upload should cover exactly these dates.</p></div></div>
+    <div class="period">
+      <div class="field"><label for="from">From</label><input id="from" type="date"></div>
+      <div class="field"><label for="to">To</label><input id="to" type="date"></div>
+      <div class="hint" id="periodHint">Tip: leave blank and upload Total sales first — the dates are filled in from the file.</div>
+    </div>
+  </section>
+
+  <!-- 2. Uploads -->
+  <section class="card">
+    <div class="card-h"><div class="num">2</div><div><h2>Upload source files</h2><p>Files are recognised by their columns, not their names. You can drop all six at once.</p></div></div>
+    <div class="dropall" id="dropAll">Drop all files here, or use the boxes below</div>
+    <div class="uploads" id="uploads"></div>
+  </section>
+
+  <!-- 3. Ad spend -->
+  <section class="card">
+    <div class="card-h"><div class="num">3</div><div><h2>Advertising spend (A$)</h2><p>Optional. Enter daily spend now (type, paste from a spreadsheet, or import a CSV with Date, Meta, Google, Pinterest, Snap, TikTok) — or leave it blank and fill the ad rows in the Excel file later.</p></div>
+      <div class="right"><button class="btn btn-ghost btn-sm" id="adImportBtn" type="button">Import CSV</button><button class="btn btn-ghost btn-sm" id="adClear" type="button">Clear</button><input id="adImport" type="file" accept=".csv" class="hidden"></div></div>
+    <div id="adWrap"><p class="muted small">Set the report period first.</p></div>
+  </section>
+
+  <!-- 4. Overview -->
+  <section class="card">
+    <div class="card-h"><div class="num">4</div><div><h2>Overview — Ready / Gaps</h2><p>Each source should be green for every date. Hover a marker for the reason.</p></div></div>
+    <div class="summary idle" id="summary">Waiting for files…</div>
+    <div id="coverage"></div>
+    <div id="cogsFix"></div>
+    <ul class="issues" id="issues"></ul>
+  </section>
+
+  <!-- 5. Preview & download -->
+  <section class="card">
+    <div class="card-h"><div class="num">5</div><div><h2>Preview &amp; download</h2><p>Key rows of the Daily Reporting sheet. The Excel file has the full report with live formulas.</p></div></div>
+    <div id="results"><p class="muted small">The preview appears once the required files are loaded.</p></div>
+    <div class="dl-row">
+      <button class="btn btn-primary" id="download" type="button" disabled>⬇ Download daily report (.xlsx)</button>
+      <span class="muted small" id="dlNote">Needs Total sales, Net payments, COGS, COGS Shopify and Merchant fees.</span>
+    </div>
+  </section>
+</main>
+
+<!-- SOP drawer -->
+<div class="scrim" id="scrim"></div>
+<aside class="drawer" id="drawer" aria-label="Standard operating procedure" aria-hidden="true">
+  <div class="drawer-h"><h2>Standard operating procedure</h2><div class="spacer"></div><button class="btn btn-ghost btn-sm" id="closeSop" type="button">Close ✕</button></div>
+  <nav class="drawer-nav">
+    <a href="#sop-workflow">Workflow</a><a href="#sop-cogs">COGS</a><a href="#sop-shopcogs">COGS Shopify</a><a href="#sop-merchant">Merchant fees</a><a href="#sop-recon">Sales reconciliation</a><a href="#sop-net">Net payments</a><a href="#sop-sales">Total sales</a><a href="#sop-ads">Ad spend</a><a href="#sop-after">After upload</a><a href="#sop-fix">Fixing gaps</a>
+  </nav>
+  <div class="drawer-body sop" id="sopBody">
+    <h3 id="sop-workflow">Quick workflow</h3>
+    <ol>
+      <li>Choose the <b>report period</b> (From / To). Use the same dates for every export.</li>
+      <li>Collect the <b>six source files</b> for that period — where each one comes from is listed below.</li>
+      <li><b>Upload</b> them in step 2. You can drop them all at once; each is matched to its box automatically.</li>
+      <li>Enter or paste the daily <b>advertising spend</b> in step 3 — or leave it blank and fill it in the Excel file later.</li>
+      <li>Check the <b>Overview</b>: every source should be green for every date. Fix anything amber or red.</li>
+      <li>Click <b>Download daily report</b>.</li>
+    </ol>
+
+    <h3>File sources</h3>
+    <p class="muted small">Six uploads power the report. Three are exported straight from Shopify; three come from the other Saint tools.</p>
+
+    <div class="src-card" id="sop-cogs">
+      <h4>1. COGS (supplier) <span class="fmt">Excel · .xlsx</span></h4>
+      <div class="where"><b>Where:</b> generated by the <span class="tool" data-tool="cogs">SAINT COGS</span> tool from the supplier's (Speedfulfill) order export.</div>
+      <ol>
+        <li>Open the SAINT COGS tool.</li>
+        <li>Upload the supplier's raw order Excel for the period and process it (follow that tool's own SOP).</li>
+        <li>Download the processed COGS workbook. It contains the order lines (Date, Price, Total cost) and a daily summary with the USD → AUD rate.</li>
+        <li>If a date has no USD → AUD rate in that file, Saint Daily uses the rate from the most recent earlier date and notes it in the report.</li>
+        <li>Upload it in box <b>1 · COGS</b>.</li>
+      </ol>
+      <div class="tip">If a SKU has no price in the COGS tool the file shows <b>#N/A</b>. Saint Daily lists those lines in the Overview for review — enter a price, or click <b>Skip</b> to proceed with the file as it is.</div>
+    </div>
+
+    <div class="src-card" id="sop-shopcogs">
+      <h4>2. COGS Shopify <span class="fmt">CSV</span></h4>
+      <div class="where"><b>Where:</b> Shopify Admin → Analytics → Reports → <b>Cost of goods sold</b> (by order / product).</div>
+      <ol>
+        <li>Open Analytics → Reports and search for “Cost of goods sold”.</li>
+        <li>Set the date range to the report period and click Apply.</li>
+        <li>Click the three dots → <b>Export</b> → CSV. Columns include Day, Order name, Product title, Cost of goods sold.</li>
+        <li>Upload it in box <b>2 · COGS Shopify</b>.</li>
+      </ol>
+    </div>
+
+    <div class="src-card" id="sop-merchant">
+      <h4>3. Merchant fees <span class="fmt">Excel · .xlsx</span></h4>
+      <div class="where"><b>Where:</b> reconciled and exported from the <span class="tool" data-tool="merchant">Saint Merchant</span> tool, which builds the PayPal / Afterpay / Shopify fee tables.</div>
+      <ol>
+        <li>Collect the five inputs for the period: Shopify <i>Net payments by order</i>, Shopify <i>Total sales by order</i>, Shopify <i>payment transactions export</i>, PayPal <i>activity download</i> and Afterpay <i>settlement report</i>.</li>
+        <li>Open Saint Merchant, upload the five CSVs and run <b>Upload &amp; reconcile</b>.</li>
+        <li>Download the merchant Excel output (PayPal, Afterpay and Shopify tables by date).</li>
+        <li>Upload it in box <b>3 · Merchant fees</b>.</li>
+      </ol>
+      <div class="tip">Merchant fees settle weekly — make sure the settlement / payout exports cover every day in the period, otherwise that day shows a gap.</div>
+    </div>
+
+    <div class="src-card" id="sop-recon">
+      <h4>4. Sales reconciliation <span class="fmt">CSV or Excel</span></h4>
+      <div class="where"><b>Where:</b> generated by the <span class="tool" data-tool="sales">SaintEyewear Sales Journal</span> tool.</div>
+      <ol>
+        <li>Open the Sales Journal tool.</li>
+        <li>Upload the Shopify <i>Total sales by order</i> and <i>Net payments by order</i> CSVs for the same dates.</li>
+        <li>Generate the journal and download the <b>reconciliation</b> file.</li>
+        <li>Upload it in box <b>4 · Sales reconciliation</b>.</li>
+      </ol>
+      <div class="tip">Saint Daily recalculates the reconciliation from the Shopify files and compares it with this file. Any difference is flagged in the Overview.</div>
+    </div>
+
+    <div class="src-card" id="sop-net">
+      <h4>5. Net payments <span class="fmt">CSV</span></h4>
+      <div class="where"><b>Where:</b> Shopify Admin → Analytics → Reports → <b>Net payments by order</b>.</div>
+      <ol>
+        <li>Go to Analytics → Reports.</li>
+        <li>Open “Net payments by order”.</li>
+        <li>Set the date range and click Apply.</li>
+        <li>Click the three dots → <b>Export</b>.</li>
+        <li>Upload the CSV in box <b>5 · Net payments</b>.</li>
+      </ol>
+    </div>
+
+    <div class="src-card" id="sop-sales">
+      <h4>6. Total sales <span class="fmt">CSV</span></h4>
+      <div class="where"><b>Where:</b> Shopify Admin → Analytics → Reports → <b>Total sales by order</b>.</div>
+      <ol>
+        <li>Back in Reports, open “Total sales by order”.</li>
+        <li>Use exactly the same date range as Net payments.</li>
+        <li>Export the CSV.</li>
+        <li>Upload it in box <b>6 · Total sales</b>.</li>
+      </ol>
+    </div>
+
+    <div class="src-card" id="sop-ads">
+      <h4>Advertising spend <span class="fmt">Manual</span></h4>
+      <div class="where"><b>Where:</b> each platform's ads manager — Meta, Google Ads, Pinterest, Snapchat, TikTok — daily spend in A$ for the same dates.</div>
+      <ol>
+        <li>Export or read the daily spend per platform.</li>
+        <li>Type it into step 3, paste a block copied from a spreadsheet (Date + five columns, or just the five columns), or import a CSV.</li>
+        <li>Or leave it blank: the five ad rows are left empty (highlighted) in the Daily Reporting sheet, and totals, profit and ROAS update when you type them in Excel.</li>
+      </ol>
+    </div>
+
+    <h3 id="sop-after">After uploading</h3>
+    <ol>
+      <li><b>Overview</b> shows Ready / Gaps for every source and date. Green = OK, amber = check it, red = missing.</li>
+      <li><b>Preview</b> shows the main Daily Reporting rows for the period.</li>
+      <li><b>Download</b> gives an Excel workbook with these sheets:
+        <table style="margin-top:6px">
+          <tr><th>Sheet</th><th>What it holds</th></tr>
+          <tr><td>Daily Reporting</td><td>The report, one column per day plus a period total. Rows are live formulas linked to the sheets below.</td></tr>
+          <tr><td>COGS Calculation as per Supplier</td><td>USD product &amp; shipping cost × FX rate → AUD, per day.</td></tr>
+          <tr><td>Countrywise Sales</td><td>Product revenue ex GST by country, with share %.</td></tr>
+          <tr><td>Productwise Sales</td><td>Gross, discounts, refunds and net sales by product.</td></tr>
+          <tr><td>(Month) Breakdown Sheet</td><td>Daily sales reconciliation by gateway and country.</td></tr>
+          <tr><td>Difference COGS</td><td>Supplier COGS vs Shopify COGS per day.</td></tr>
+          <tr><td>Fees Calculation</td><td>Afterpay, PayPal and Shopify fees per day (ex GST, GST, total).</td></tr>
+          <tr><td>Journal Entries</td><td>Balanced daily sales journal plus merchant-fee entries.</td></tr>
+          <tr><td>Ratio Calculation Sheet</td><td>Gross margin, net margin, COGS ratio, operating-expense ratio, ROAS.</td></tr>
+          <tr><td>Checks &amp; Notes</td><td>Files used, open review items and how each row is calculated.</td></tr>
+        </table>
+      </li>
+    </ol>
+
+    <h3 id="sop-fix">Fixing gaps</h3>
+    <table>
+      <tr><th>You see</th><th>What to do</th></tr>
+      <tr><td>Red on Total sales / Net payments</td><td>The Shopify export doesn't cover that date. Re-export with the full date range.</td></tr>
+      <tr><td>Amber on COGS — “no product price (#N/A)”</td><td>A SKU isn't priced in the COGS tool. Enter a USD price in the Overview, click <b>Skip</b> to proceed with the file as it is ($0), or add the price in the COGS tool and re-upload.</td></tr>
+      <tr><td>Red / amber on Merchant fees</td><td>A gateway's fees are missing for that date. Check that the PayPal / Afterpay / Shopify exports in Saint Merchant cover the whole week.</td></tr>
+      <tr><td>Amber on Sales reconciliation</td><td>The uploaded file doesn't match the Shopify files — usually a different date range. Regenerate it from the same two CSVs.</td></tr>
+      <tr><td>Blue “–” on Ad spend</td><td>Not entered — fine. Fill the ad rows in the Excel file later.</td></tr>
+    </table>
+
+    <h3>Other Saint tools</h3>
+    <ul>
+      <li><span class="tool" data-tool="cogs">SAINT COGS</span> — supplier COGS Excel</li>
+      <li><span class="tool" data-tool="merchant">Saint Merchant</span> — merchant fee reconciliation</li>
+      <li><span class="tool" data-tool="sales">SaintEyewear Sales Journal</span> — sales reconciliation</li>
+    </ul>
+  </div>
+</aside>
+
+<script>
+(function () {
+'use strict';
+const $ = id => document.getElementById(id);
+const E = window.SaintDailyEngine;
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const money = n => (n == null || isNaN(n)) ? '' : Number(n).toLocaleString('en-AU', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const short = iso => { const d = new Date(iso + 'T00:00:00'); return d.toLocaleDateString('en-AU', { day: '2-digit', month: 'short' }); };
+
+/* ---------- SOP drawer + tool links ---------- */
+document.querySelectorAll('.tool[data-tool]').forEach(el => {
+  const url = (window.TOOL_LINKS || {})[el.dataset.tool];
+  if (url) { const a = document.createElement('a'); a.href = url; a.target = '_blank'; a.rel = 'noopener'; a.className = 'tool'; a.textContent = el.textContent + ' ↗'; el.replaceWith(a); }
+});
+function openSop(anchor) {
+  $('drawer').classList.add('open'); $('scrim').classList.add('open'); $('drawer').setAttribute('aria-hidden', 'false');
+  if (anchor) setTimeout(() => { const t = document.getElementById(anchor); if (t) t.scrollIntoView({ block: 'start' }); }, 60);
+}
+function closeSop() { $('drawer').classList.remove('open'); $('scrim').classList.remove('open'); $('drawer').setAttribute('aria-hidden', 'true'); }
+$('openSop').onclick = () => openSop('sop-workflow');
+$('openSop2').onclick = () => openSop('sop-workflow');
+$('closeSop').onclick = closeSop; $('scrim').onclick = closeSop;
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeSop(); });
+document.querySelectorAll('.drawer-nav a').forEach(a => a.onclick = e => { e.preventDefault(); document.querySelector(a.getAttribute('href')).scrollIntoView({ block: 'start', behavior: 'smooth' }); });
+
+/* ---------- Upload slots ---------- */
+const SLOTS = [
+  { id: 'cogs', n: 1, title: 'COGS', fmt: 'Excel', accept: '.xlsx,.xls', src: 'From the SAINT COGS tool (processed supplier file).', sop: 'sop-cogs', required: true },
+  { id: 'shopCogs', n: 2, title: 'COGS Shopify', fmt: 'CSV', accept: '.csv', src: 'Shopify → Reports → Cost of goods sold.', sop: 'sop-shopcogs', required: true },
+  { id: 'merchant', n: 3, title: 'Merchant fees', fmt: 'Excel', accept: '.xlsx,.xls', src: 'From the Saint Merchant tool.', sop: 'sop-merchant', required: true },
+  { id: 'recon', n: 4, title: 'Sales reconciliation', fmt: 'CSV/XLSX', accept: '.csv,.xlsx,.xls', src: 'From the Sales Journal tool. Used as a cross-check.', sop: 'sop-recon', required: false },
+  { id: 'net', n: 5, title: 'Net payments', fmt: 'CSV', accept: '.csv', src: 'Shopify → Reports → Net payments by order.', sop: 'sop-net', required: true },
+  { id: 'sales', n: 6, title: 'Total sales', fmt: 'CSV', accept: '.csv', src: 'Shopify → Reports → Total sales by order.', sop: 'sop-sales', required: true }
+];
+const files = {};               // id → { name, data, info } | { name, error } | { busy }
+const cogsOverrides = {};
+let current = null, issues = [], recalcTimer = null;
+
+function renderSlots() {
+  $('uploads').innerHTML = SLOTS.map(s => {
+    const f = files[s.id];
+    const cls = f?.data ? 'ok' : f?.error ? 'bad' : '';
+    const state = f?.busy ? '<span class="state busy">Reading…</span>' : f?.data ? '<span class="state ok">✓ Loaded</span>' : f?.error ? '<span class="state bad">✕ Check file</span>' : `<span class="state wait">${s.required ? 'Required' : 'Recommended'}</span>`;
+    const body = f?.data ? `<div class="file">${esc(f.name)}<br><span class="muted">${esc(f.info || '')}</span></div>` : f?.error ? `<div class="file err">${esc(f.name ? f.name + ': ' : '')}${esc(f.error)}</div>` : `<p class="src">${esc(s.src)}</p>`;
+    return `<div class="up ${cls}" data-slot="${s.id}">
+      <div class="up-top"><span class="num" style="width:22px;height:22px;font-size:12px">${s.n}</span><strong>${s.title}</strong><span class="fmt">${s.fmt}</span>${state}</div>
+      ${body}
+      <div class="acts"><button class="btn btn-ghost btn-sm" type="button" data-pick="${s.id}">${f?.data ? 'Replace' : 'Choose file'}</button>
+      <button class="link-btn" type="button" data-sop="${s.sop}">Where do I get this?</button>
+      ${f?.data || f?.error ? `<button class="link-btn" type="button" data-clear="${s.id}" style="margin-left:auto;color:var(--muted)">Remove</button>` : ''}</div>
+      <input type="file" id="in-${s.id}" accept="${s.accept}">
+    </div>`;
+  }).join('');
+  const loaded = SLOTS.filter(s => files[s.id]?.data).length;
+  $('progressPill').textContent = `${loaded} of 6 files`;
+  document.querySelectorAll('[data-pick]').forEach(b => b.onclick = () => $('in-' + b.dataset.pick).click());
+  document.querySelectorAll('[data-sop]').forEach(b => b.onclick = () => openSop(b.dataset.sop));
+  document.querySelectorAll('[data-clear]').forEach(b => b.onclick = () => { delete files[b.dataset.clear]; renderSlots(); scheduleRecalc(); });
+  SLOTS.forEach(s => { $('in-' + s.id).onchange = e => { if (e.target.files[0]) loadFile(e.target.files[0], s.id); }; });
+  document.querySelectorAll('.up').forEach(el => dropTarget(el, list => { if (list.length > 1) routeFiles(list); else loadFile(list[0], el.dataset.slot); }));
+}
+function dropTarget(el, cb) {
+  el.addEventListener('dragover', e => { e.preventDefault(); el.classList.add('drag'); });
+  el.addEventListener('dragleave', () => el.classList.remove('drag'));
+  el.addEventListener('drop', e => { e.preventDefault(); e.stopPropagation(); el.classList.remove('drag'); if (e.dataTransfer.files.length) cb([...e.dataTransfer.files]); });
+}
+dropTarget($('dropAll'), routeFiles);
+$('dropAll').onclick = () => { const i = document.createElement('input'); i.type = 'file'; i.multiple = true; i.accept = '.csv,.xlsx,.xls'; i.onchange = () => routeFiles([...i.files]); i.click(); };
+$('dropAll').style.cursor = 'pointer';
+
+/* ---------- Reading & recognising files ---------- */
+const readText = f => new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = rej; r.readAsText(f); });
+const readBuf = f => new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = rej; r.readAsArrayBuffer(f); });
+const hasCols = (rows, cols) => rows.length && cols.every(c => Object.keys(rows[0]).some(k => k.trim().toLowerCase() === c.toLowerCase()));
+
+async function parseAny(file) {
+  if (/\.csv$/i.test(file.name)) return { kind: 'csv', rows: E.parseCSV(await readText(file)) };
+  if (typeof XLSX === 'undefined') throw new Error('Excel reader did not load — check the internet connection and refresh.');
+  return { kind: 'wb', wb: XLSX.read(await readBuf(file), { type: 'array' }) };
+}
+function sheetText(wb, maxRows = 40) {
+  return wb.SheetNames.map(s => E.sheetMatrix(wb.Sheets[s]).slice(0, maxRows).flat().filter(v => typeof v === 'string').join('|')).join('|').toLowerCase();
+}
+/** Which slot does this parsed file belong to? */
+function detect(p) {
+  if (p.kind === 'csv') {
+    const r = p.rows;
+    if (hasCols(r, ['Total GST Payable']) || hasCols(r, ['Sales Revenue (Australia)'])) return 'recon';
+    if (hasCols(r, ['Cost of goods sold'])) return 'shopCogs';
+    if (hasCols(r, ['Payment gateway', 'Net payments'])) return 'net';
+    if (hasCols(r, ['Gross sales', 'Total sales'])) return 'sales';
+    return null;
+  }
+  const t = sheetText(p.wb);
+  if (/total gst payable|sales revenue \(australia\)/.test(t)) return 'recon';
+  if (/merchantfee|feeamountaud|feeexgst|gstonfee/.test(t)) return 'merchant';
+  if (/total cost/.test(t) && /price/.test(t)) return 'cogs';
+  return null;
+}
+function describe(id, p) {
+  if (p.kind === 'csv') {
+    const ds = p.rows.map(r => E.isoDate(r['Day'] ?? r['Date'])).filter(Boolean).sort();
+    return { dates: ds.length ? [ds[0], ds.at(-1)] : null, info: `${p.rows.length.toLocaleString()} rows${ds.length ? ` · ${short(ds[0])} – ${short(ds.at(-1))}` : ''}` };
+  }
+  return { dates: null, info: `${p.wb.SheetNames.length} sheet(s)` };
+}
+async function loadFile(file, slotId, parsed) {
+  files[slotId] = { busy: true, name: file.name }; renderSlots();
+  try {
+    const p = parsed || await parseAny(file);
+    const kind = detect(p);
+    const slot = SLOTS.find(s => s.id === slotId);
+    if (kind !== slotId) {
+      const other = SLOTS.find(s => s.id === kind);
+      throw new Error(other ? `This looks like the ${other.title} file — drop it in box ${other.n}.` : `This doesn't look like the ${slot.title} file. See “Where do I get this?”.`);
+    }
+    const data = p.kind === 'csv' ? p.rows : p.wb;
+    if (p.kind === 'csv' && !data.length) throw new Error('The file has no rows.');
+    const d = describe(slotId, p);
+    files[slotId] = { name: file.name, data, info: d.info };
+    if (d.dates && !$('from').value && !$('to').value && ['sales', 'net'].includes(slotId)) { $('from').value = d.dates[0]; $('to').value = d.dates[1]; buildAdGrid(); }
+  } catch (e) { files[slotId] = { name: file.name, error: e.message }; }
+  renderSlots(); scheduleRecalc();
+}
+async function routeFiles(list) {
+  for (const f of list) {
+    try {
+      const p = await parseAny(f);
+      const kind = detect(p);
+      if (kind) await loadFile(f, kind, p);
+      else flash(`Couldn't recognise “${f.name}”. Use the matching box instead.`);
+    } catch (e) { flash(`${f.name}: ${e.message}`); }
+  }
+}
+function flash(t) { const el = $('dropAll'); const old = el.dataset.old || el.textContent; el.dataset.old = old; el.textContent = t; el.style.color = 'var(--err)'; setTimeout(() => { el.textContent = old; el.style.color = ''; }, 5000); }
+
+/* ---------- Period & ad spend ---------- */
+const PLATFORMS = [['meta', 'Meta'], ['google', 'Google'], ['pinterest', 'Pinterest'], ['snap', 'Snap'], ['tiktok', 'TikTok']];
+let adValues = {};  // date → {meta,…}
+function periodDates() { try { return $('from').value && $('to').value ? E.dateRange($('from').value, $('to').value) : null; } catch (e) { return { error: e.message }; } }
+function buildAdGrid() {
+  const ds = periodDates();
+  $('periodHint').textContent = !ds ? 'Tip: leave blank and upload Total sales first — the dates are filled in from the file.' : ds.error ? ds.error : `${ds.length} day(s): ${short(ds[0])} – ${short(ds.at(-1))}`;
+  $('periodHint').style.color = ds && ds.error ? 'var(--err)' : '';
+  if (!ds || ds.error) { $('adWrap').innerHTML = '<p class="muted small">Set the report period first.</p>'; return; }
+  let h = '<div class="tbl-wrap"><table class="ad"><thead><tr><th>Date</th>' + PLATFORMS.map(p => `<th>${p[1]}</th>`).join('') + '<th>Total</th></tr></thead><tbody>';
+  ds.forEach((d, r) => {
+    const v = adValues[d] || {};
+    h += `<tr data-date="${d}"><td>${short(d)} <span class="muted small">${new Date(d + 'T00:00:00').toLocaleDateString('en-AU', { weekday: 'short' })}</span></td>` +
+      PLATFORMS.map(([k], c) => `<td><input inputmode="decimal" data-r="${r}" data-c="${c}" data-k="${k}" value="${v[k] ?? ''}" placeholder="0.00"></td>`).join('') + `<td class="rowtot">0.00</td></tr>`;
+  });
+  h += '<tr class="sub"><td>Total</td>' + PLATFORMS.map(([k]) => `<td data-coltot="${k}">0.00</td>`).join('') + '<td id="adGrand">0.00</td></tr></tbody></table></div>';
+  $('adWrap').innerHTML = h;
+  $('adWrap').querySelectorAll('input').forEach(i => { i.addEventListener('input', onAdInput); i.addEventListener('paste', onAdPaste); });
+  adTotals();
+}
+function onAdInput(e) { const tr = e.target.closest('tr'); (adValues[tr.dataset.date] ||= {})[e.target.dataset.k] = e.target.value; adTotals(); scheduleRecalc(); }
+function onAdPaste(e) {
+  const text = (e.clipboardData || window.clipboardData).getData('text');
+  if (!/[\t\n,]/.test(text.trim())) return;
+  e.preventDefault();
+  const r0 = +e.target.dataset.r, c0 = +e.target.dataset.c, ds = periodDates();
+  const lines = text.replace(/\r/g, '').split('\n').filter(l => l.trim());
+  let offset = 0;
+  lines.forEach(line => {
+    let cells = line.split(/\t|,/).map(s => s.trim());
+    let d, col = c0;
+    const asDate = E.isoDate(cells[0]);
+    if (asDate && ds.includes(asDate)) { d = asDate; cells = cells.slice(1); col = 0; }  // "Date, Meta, Google, …" rows
+    else if (cells[0] && isNaN(parseFloat(cells[0].replace(/[$,]/g, '')))) return;      // header / text row
+    else d = ds[r0 + offset++];
+    if (!d) return;
+    cells.forEach((v, j) => { const p = PLATFORMS[col + j]; if (p && v !== '') (adValues[d] ||= {})[p[0]] = String(E.toNum(v)); });
+  });
+  buildAdGrid(); scheduleRecalc();
+}
+function adTotals() {
+  let grand = 0; const col = {};
+  $('adWrap').querySelectorAll('tbody tr[data-date]').forEach(tr => {
+    let t = 0; tr.querySelectorAll('input').forEach(i => { const v = E.toNum(i.value); t += v; col[i.dataset.k] = (col[i.dataset.k] || 0) + v; });
+    tr.querySelector('.rowtot').textContent = money(t); grand += t;
+  });
+  PLATFORMS.forEach(([k]) => { const el = $('adWrap').querySelector(`[data-coltot="${k}"]`); if (el) el.textContent = money(col[k] || 0); });
+  if ($('adGrand')) $('adGrand').textContent = money(grand);
+}
+function adSpendObj() { const o = {}; Object.entries(adValues).forEach(([d, v]) => { o[d] = {}; PLATFORMS.forEach(([k]) => o[d][k] = E.toNum(v[k])); }); return o; }
+$('from').onchange = $('to').onchange = () => { buildAdGrid(); scheduleRecalc(); };
+$('adImportBtn').onclick = () => $('adImport').click();
+$('adImport').onchange = async e => {
+  const f = e.target.files[0]; if (!f) return;
+  const rows = E.parseCSV(await readText(f));
+  rows.forEach(r => { const d = E.isoDate(r.Date ?? r.Day); if (!d) return; const o = adValues[d] ||= {}; PLATFORMS.forEach(([k, label]) => { const key = Object.keys(r).find(x => x.trim().toLowerCase() === label.toLowerCase()); if (key) o[k] = String(E.toNum(r[key])); }); });
+  e.target.value = ''; buildAdGrid(); scheduleRecalc();
+};
+$('adClear').onclick = () => { if (confirm('Clear all advertising spend values?')) { adValues = {}; buildAdGrid(); scheduleRecalc(); } };
+
+/* ---------- Recalculate ---------- */
+function scheduleRecalc() { clearTimeout(recalcTimer); recalcTimer = setTimeout(recalc, 250); }
+const REQUIRED = SLOTS.filter(s => s.required).map(s => s.id);
+function recalc() {
+  current = null; issues = [];
+  const ds = periodDates();
+  const missing = SLOTS.filter(s => s.required && !files[s.id]?.data);
+  if (!ds || ds.error || missing.length) {
+    const msg = !ds ? 'Set the report period.' : ds.error ? ds.error : `Waiting for: ${missing.map(s => s.title).join(', ')}.`;
+    setSummary('idle', msg); $('coverage').innerHTML = ''; $('issues').innerHTML = ''; $('cogsFix').innerHTML = '';
+    $('results').innerHTML = '<p class="muted small">The preview appears once the required files are loaded.</p>';
+    $('download').disabled = true; $('dlNote').textContent = 'Needs Total sales, Net payments, COGS, COGS Shopify and Merchant fees.';
+    return;
+  }
+  try {
+    current = E.buildDaily({ from: ds[0], to: ds.at(-1), netRows: files.net.data, salesRows: files.sales.data, shopifyCogsRows: files.shopCogs.data, merchantWb: files.merchant.data, cogsWb: files.cogs.data, adSpend: adSpendObj(), cogsOverrides, reconRows: reconRows() });
+    issues = E.validate(current);
+  } catch (e) {
+    setSummary('err', e.message); $('download').disabled = true; $('results').innerHTML = ''; $('coverage').innerHTML = ''; $('issues').innerHTML = ''; return;
+  }
+  renderOverview(); renderResults();
+  const errs = issues.filter(i => i.severity === 'ERROR').length;
+  $('download').disabled = errs > 0;
+  $('dlNote').textContent = errs ? 'Fix the red items first.' : issues.length ? 'You can download now — amber items are listed on the “Checks & Notes” sheet.' : 'Everything checks out.';
+}
+function reconRows() {
+  const f = files.recon?.data; if (!f) return null;
+  if (Array.isArray(f)) return f;
+  for (const s of f.SheetNames) { const rows = XLSX.utils.sheet_to_json(f.Sheets[s], { defval: '' }); if (rows.length && Object.keys(rows[0]).some(h => /^date$/i.test(h.trim()))) return rows; }
+  return null;
+}
+function setSummary(cls, text) { const el = $('summary'); el.className = 'summary ' + cls; el.textContent = text; }
+
+function renderOverview() {
+  const cov = E.coverage(current), ds = current.dates;
+  const errs = issues.filter(i => i.severity === 'ERROR').length, rev = issues.filter(i => i.severity === 'REVIEW').length;
+  setSummary(errs ? 'err' : rev ? 'warn' : 'ok', errs ? `${errs} gap(s) must be fixed before download.` : rev ? `Ready to download · ${rev} item(s) to review` : `Ready — all sources cover all ${ds.length} day(s).`);
+  let h = '<div class="tbl-wrap"><table class="cov"><thead><tr><th>Source</th>' + ds.map(d => `<th>${short(d)}</th>`).join('') + '</tr></thead><tbody>';
+  E.SOURCES.forEach(src => {
+    h += `<tr><td>${src}</td>` + ds.map(d => { const c = cov[src][d]; const sym = c.s === 'ok' ? '✓' : c.s === 'gap' ? '✕' : c.s === 'info' ? '–' : '!'; return `<td><span class="dot ${c.s}" title="${esc(src + ' · ' + d + (c.why ? ' — ' + c.why : ''))}">${sym}</span></td>`; }).join('') + '</tr>';
+  });
+  h += '</tbody></table></div><div class="legend"><span><span class="dot ok">✓</span> Ready</span><span><span class="dot review">!</span> Review</span><span><span class="dot gap">✕</span> Gap</span><span><span class="dot info">–</span> Left blank / note</span></div>';
+  $('coverage').innerHTML = h;
+  $('issues').innerHTML = issues.map(i => `<li class="${i.severity}"><b>${esc(i.source)}${i.date ? ' · ' + esc(i.date.replace(/\d{4}-\d{2}-\d{2}/g, short)) : ''}</b><span>${esc(i.message)}</span></li>`).join('');
+  // unpriced COGS lines
+  const un = current.cogsUnpriced;
+  if (!un.length) { $('cogsFix').innerHTML = ''; return; }
+  const focused = document.activeElement && document.activeElement.dataset.cogskey;
+  $('cogsFix').innerHTML = `<div class="cogsfix"><h3>COGS lines with no product price</h3><p class="small muted" style="margin:0 0 8px">These SKUs show #N/A in the COGS file. Enter a USD price for the line, or choose <b>Skip</b> to proceed with the file as it is (counted as $0). Nothing is filled in automatically.</p>
+    <div class="tbl-wrap"><table><thead><tr><th>Date</th><th>Order</th><th>SKU</th><th>Product</th><th>Qty</th><th>USD price</th><th></th></tr></thead><tbody>` +
+    un.map(u => { const skipped = cogsOverrides[u.key] === 'SKIP';
+      return `<tr><td>${short(u.date)}</td><td>${esc(u.order)}</td><td>${esc(u.sku)}</td><td style="text-align:left">${esc(u.product)}</td><td>${esc(u.quantity)}</td>
+      <td>${skipped ? '<span class="muted">Skipped — $0 as in file</span>' : `<input data-cogskey="${esc(u.key)}" inputmode="decimal" value="${esc(cogsOverrides[u.key] ?? '')}" placeholder="USD price">`}</td>
+      <td><button class="btn btn-ghost btn-sm" type="button" data-skip="${esc(u.key)}">${skipped ? 'Undo skip' : 'Skip'}</button></td></tr>`; }).join('') +
+    '</tbody></table></div>' + (un.some(u => cogsOverrides[u.key] == null || cogsOverrides[u.key] === '') ? '<div style="margin-top:10px"><button class="btn btn-ghost btn-sm" type="button" id="skipAllCogs">Skip all — proceed with file values</button></div>' : '') + '</div>';
+  $('cogsFix').querySelectorAll('[data-skip]').forEach(b => b.onclick = () => { const k = b.dataset.skip; if (cogsOverrides[k] === 'SKIP') delete cogsOverrides[k]; else cogsOverrides[k] = 'SKIP'; recalc(); });
+  if ($('skipAllCogs')) $('skipAllCogs').onclick = () => { un.forEach(u => { if (cogsOverrides[u.key] == null || cogsOverrides[u.key] === '') cogsOverrides[u.key] = 'SKIP'; }); recalc(); };
+  $('cogsFix').querySelectorAll('input').forEach(i => i.addEventListener('change', () => { const v = i.value.trim(); if (v === '') delete cogsOverrides[i.dataset.cogskey]; else cogsOverrides[i.dataset.cogskey] = String(E.toNum(v)); scheduleRecalc(); }));
+  if (focused) { const el = $('cogsFix').querySelector(`[data-cogskey="${focused}"]`); if (el) el.focus(); }
+}
+
+function renderResults() {
+  const T = current.totals;
+  const kpi = (k, v, cls = '') => `<div class="kpi"><div class="k">${k}</div><div class="v ${cls}">${v}</div></div>`;
+  let h = '<div class="kpis">' + kpi('Total sales', 'A$' + money(T.totalSales)) + kpi('Revenue ex GST', 'A$' + money(T.totalRevenue)) +
+    kpi('Net profit (accounting)', 'A$' + money(T.netProfit), T.netProfit < 0 ? 'neg' : '') + kpi('Cash after GST remittance', 'A$' + money(T.netProfitAfterGST), T.netProfitAfterGST < 0 ? 'neg' : '') +
+    kpi('ROAS', T.adSpend ? T.roas.toFixed(2) + '×' : '—') + '</div>';
+  const R = [
+    ['sec', 'Sales'], ['orderRange', 'Order range', 't'], ['numberOrders', 'Number of orders', 'i'], ['gross', 'Gross sales'], ['discounts', 'Discounts'], ['returns', 'Returns'], ['totalSales', 'Total sales', 'hl'],
+    ['sec', 'Revenue (ex GST)'], ['productRevenue', 'Product revenue'], ['shippingAU', 'Shipping revenue – AU'], ['shippingOther', 'Shipping revenue – others'], ['refundExGST', 'Refund ex GST'], ['totalRevenue', 'Total revenue', 'hl'],
+    ['sec', 'Costs'], ['cogsProduct', 'COGS product (supplier)'], ['cogsShipping', 'COGS shipping (supplier)'], ['cogsShopify', 'COGS Shopify'], ['grossProfit', 'Gross profit'], ['merchantFees', 'Merchant fees ex GST'], ['adSpend', 'Advertising spend'],
+    ['sec', 'Profit'], ['netProfit', 'Net profit (supplier COGS)', 'hl'], ['profitMargin', 'Profit margin', 'p'], ['roas', 'ROAS', 'r'],
+    ['sec', 'GST'], ['gstSales', 'GST on sales'], ['gstShipping', 'GST on shipping'], ['gstFee', 'GST on fees'], ['gstRefundAU', 'GST on AU refunds'], ['netGST', 'Net GST'], ['netProfitAfterGST', 'Cash after GST remittance (Net profit − Net GST)', 'hl']
+  ];
+  const cell = (v, t) => t === 't' ? esc(v) : t === 'i' ? Number(v).toLocaleString() : t === 'p' ? (v * 100).toFixed(2) + '%' : t === 'r' ? (v ? v.toFixed(2) : '—') : `<span class="${v < 0 ? 'neg' : ''}">${money(v)}</span>`;
+  h += '<div class="tbl-wrap"><table class="preview"><thead><tr><th>Metric</th>' + current.dates.map(d => `<th>${short(d)}</th>`).join('') + '<th>Total</th></tr></thead><tbody>';
+  R.forEach(([k, label, t]) => {
+    if (k === 'sec') { h += `<tr class="sec"><td colspan="${current.dates.length + 2}">${label}</td></tr>`; return; }
+    h += `<tr class="${t === 'hl' ? 'hl' : ''}"><td>${label}</td>` + current.rows.map(r => `<td>${cell(r[k], t)}</td>`).join('') + `<td><b>${cell(T[k], t)}</b></td></tr>`;
+  });
+  h += '</tbody></table></div>';
+  $('results').innerHTML = h;
+}
+
+/* ---------- Download ---------- */
+$('download').onclick = async () => {
+  if (!current) return;
+  const btn = $('download'); btn.disabled = true; const label = btn.textContent; btn.textContent = 'Building workbook…';
+  try {
+    if (typeof ExcelJS === 'undefined') throw new Error('Excel writer did not load — check the internet connection and refresh.');
+    const fileNames = Object.fromEntries(SLOTS.map(s => [s.title, files[s.id]?.name || '']));
+    const wb = SaintReportExport.build(current, { ExcelJS, countrySummary: E.countrySummary(current), productSummary: E.productSummary(files.sales.data, current.dates), issues, fileNames });
+    const buf = await wb.xlsx.writeBuffer();
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
+    a.download = `Daily Reporting Sheet_Saint Eyewear_${current.dates[0]}_to_${current.dates.at(-1)}.xlsx`;
+    document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+  } catch (e) { alert('Could not build the workbook: ' + e.message); }
+  btn.textContent = label; btn.disabled = false;
+};
+
+renderSlots(); buildAdGrid(); recalc();
+if (typeof XLSX === 'undefined' || typeof ExcelJS === 'undefined') setSummary('err', 'The Excel libraries did not load. Check the internet connection and refresh the page.');
+})();
+</script>
+</body>
+</html>
