@@ -43,6 +43,8 @@
     wb.calcProperties = { fullCalcOnLoad: true };
 
     const dates = result.dates, N = dates.length, rows = result.rows, T = result.totals;
+    const has = result.has || { sales: true, net: true, revenue: true, cogs: true, shopCogs: true, merchant: true };
+    const notUploaded = (ws, what) => { ws.getCell('A1').value = `${what} was not uploaded for this period, so this sheet is empty.`; ws.getCell('A1').font = { italic: true, color: { argb: 'FF9A6200' } }; ws.getColumn(1).width = 80; };
     const firstMonth = utcDate(dates[0]).getUTCMonth(), lastMonth = utcDate(dates.at(-1)).getUTCMonth();
     const monthName = utcDate(dates[0]).toLocaleString('en', { month: 'long', timeZone: 'UTC' });
     const periodText = `${fmtDMY(dates[0])} to ${fmtDMY(dates.at(-1))}`;
@@ -67,6 +69,8 @@
     const recCols = result.salesResult.reconciliationColumns;
     const recBy = new Map(result.salesResult.reconciliationRows.map(r => [r.Date, r]));
     const br = ws.BR;
+    if (!has.revenue) notUploaded(br, 'Net payments / Total sales');
+    else {
     br.addRow(recCols.map(c => c === 'rounding' ? 'Rounding' : c));
     headerRow(br.getRow(1));
     br.getRow(1).height = 45;
@@ -78,18 +82,22 @@
     br.getColumn(1).width = 13;
     for (let c = 2; c <= recCols.length; c++) { br.getColumn(c).width = 15; br.getColumn(c).numFmt = NUM; }
     br.views = [{ state: 'frozen', xSplit: 1, ySplit: 1 }];
-    const brLast = colL(recCols.length);
+    }
+    const brLast = colL(Math.max(recCols.length, 2));
     const brCol = name => colL(recCols.indexOf(name) + 1);
     const brHdr = `${q(S.BR)}!$B$1:$${brLast}$1`;
     const brRow = r => `${q(S.BR)}!$B${r}:$${brLast}${r}`;
 
     // ---------------- Fees Calculation ----------------
     const fe = ws.FEES;
+    const feeFirst = 2;
+    let feeLast = 2;
+    if (!has.merchant) notUploaded(fe, 'The merchant fee workbook');
+    else {
     fe.addRow(['Date', 'Payment gateway', 'Number of orders', 'Gross sales (A$)', 'Merchant Exclude GST(A$)', 'GST on Fee', 'Merchant fee (A$)', 'Net deposit/payout (A$)', 'Approx Effective fee rate approx (%)']);
     headerRow(fe.getRow(1));
     fe.getRow(1).height = 32;
     let prevPlatform = null;
-    const feeFirst = 2;
     result.merchant.rows.forEach(m => {
       if (prevPlatform && prevPlatform !== m.platform) fe.addRow([]);
       prevPlatform = m.platform;
@@ -99,7 +107,7 @@
       setF(r.getCell(8), `D${n}-G${n}`, round2(m.gross - m.exGST - m.gst));
       setF(r.getCell(9), `IFERROR(G${n}/D${n},0)`, m.gross ? (m.exGST + m.gst) / m.gross : 0, '0.0%');
     });
-    const feeLast = fe.rowCount;
+    feeLast = Math.max(fe.rowCount, 2);
     fe.addRow([]);
     const ft = fe.addRow(['Total']);
     const sumMer = k => round2(result.merchant.rows.reduce((z, r) => z + r[k], 0));
@@ -113,16 +121,19 @@
     ['D', 'E', 'F', 'G', 'H'].forEach(L => fe.getColumn(L).numFmt = NUM);
     fe.getColumn('I').numFmt = '0.0%';
     fe.views = [{ state: 'frozen', ySplit: 1 }];
+    }
     const feeRange = L => `${q(S.FEES)}!$${L}$${feeFirst}:$${L}$${Math.max(feeLast, feeFirst)}`;
 
     // ---------------- COGS Calculation ----------------
     const cg = ws.COGS;
+    const cogsRow = {};
+    if (!has.cogs) notUploaded(cg, 'The supplier COGS workbook');
+    else {
     cg.addRow(['Supplier COGS (Saint COGS output) — ' + periodText]);
     cg.getRow(1).font = { bold: true };
     cg.addRow(['Date', 'Product Price($)', 'Shipping Cost ($)', 'Total(Product & Shipping cost)', 'FX rate (USD→AUD)', 'Product Cost AUD', 'Shipping Cost AUD', 'Convert It in AUD', 'GST', 'COGS ex GST', 'Status', 'Note']);
     headerRow(cg.getRow(2));
     cg.getRow(2).height = 32;
-    const cogsRow = {};
     dates.forEach(d => {
       const c = result.cogs[d];
       const r = cg.addRow([utcDate(d), c.productUSD, c.shippingUSD]);
@@ -160,6 +171,7 @@
     ['B', 'C', 'D', 'F', 'G', 'H', 'I', 'J'].forEach(L => cg.getColumn(L).numFmt = NUM);
     cg.getColumn('E').numFmt = '0.0000';
     cg.views = [{ state: 'frozen', ySplit: 2 }];
+    }
 
     // ---------------- Daily Reporting ----------------
     const dr = ws.DR;
@@ -210,24 +222,51 @@
     const ratioKeys = new Set(['profitMargin', 'roas']);
     const AD_KEYS = new Set(['meta', 'google', 'pinterest', 'snap', 'tiktok']);
     const fmtFor = k => k === 'profitMargin' ? PCT : k === 'roas' ? '#,##0.00' : k === 'numberOrders' ? '#,##0' : NUM;
+
+    // Rows calculated from other rows. They keep their formula even when inputs are blank, wrapped in a
+    // COUNT guard so they show nothing until every input is there — and fill themselves in if the blanks
+    // are typed into Excel later. Rows that come straight from a file are simply left blank.
+    const DERIVED = {
+      netSales: c => [`${c}${R.gross}`, `${c}${R.discounts}`, `${c}${R.returns}`],
+      totalSales: c => [`${c}${R.netSales}`, `${c}${R.shipping}`, `${c}${R.roundingTax}`],
+      refund: c => [`${c}${R.refundExGST}`, `${c}${R.gstRefundAU}`],
+      totalRevenue: c => [`${c}${R.productRevenue}`, `${c}${R.shippingAU}`, `${c}${R.shippingOther}`, `${c}${R.refundExGST}`],
+      grossProfit: c => [`${c}${R.totalRevenue}`, `${c}${R.cogsProduct}`, `${c}${R.cogsShipping}`],
+      netProfit: c => [`${c}${R.grossProfit}`, `${c}${R.merchantFees}`, `${c}${R.adSpend}`],
+      profitMargin: c => [`${c}${R.netProfit}`, `${c}${R.totalRevenue}`],
+      roas: c => [`${c}${R.totalRevenue}`, `${c}${R.adSpend}`],
+      netGST: c => [`${c}${R.gstSales}`, `${c}${R.gstShipping}`, `${c}${R.gstFee}`, `${c}${R.gstRefundAU}`],
+      netProfitAfterGST: c => [`${c}${R.netProfit}`, `${c}${R.netGST}`]
+    };
+    const guard = (cells, expr) => `IF(COUNT(${cells.join(',')})=${cells.length},${expr},"")`;
+    const blank = (cell, k) => { cell.value = null; cell.numFmt = fmtFor(k); cell.fill = fill(C.warn); };
+
     layout.forEach(([k]) => {
       if (!k || k.startsWith('_')) return;
       const row = dr.getRow(R[k]);
       rows.forEach((x, i) => {
         const c = L(i), cell = row.getCell(i + 2);
-        if (k === 'orderRange') { cell.value = x.orderRange; return; }
+        if (k === 'orderRange') { cell.value = x.orderRange || null; if (!x.orderRange) cell.fill = fill(C.warn); return; }
+        if (k === 'adSpend') {   // blank until at least one ad figure is entered
+          setF(cell, `IF(COUNT(${c}${R.meta}:${c}${R.tiktok})=0,"",SUM(${c}${R.meta}:${c}${R.tiktok}))`, x.adSpend == null ? '' : x.adSpend, fmtFor(k));
+          return;
+        }
+        if (DERIVED[k]) { setF(cell, guard(DERIVED[k](c), F[k](c, i)), x[k] == null ? '' : x[k], fmtFor(k)); return; }
+        if (x[k] == null) { blank(cell, k); return; }          // source row with no file → leave empty
         if (F[k]) setF(cell, F[k](c, i), x[k], fmtFor(k));
-        else if (AD_KEYS.has(k) && !x[k]) { cell.value = null; cell.numFmt = fmtFor(k); cell.fill = fill(C.warn); }
         else { cell.value = x[k]; cell.numFmt = fmtFor(k); }
       });
+      // Period total: only once every day in the period has a figure.
       const tcell = row.getCell(TC);
-      if (k === 'orderRange') tcell.value = T.orderRange;
-      else if (ratioKeys.has(k)) setF(tcell, F[k](TL), T[k], fmtFor(k));
-      else setF(tcell, `SUM(B${R[k]}:${lastL}${R[k]})`, T[k], fmtFor(k));
+      if (k === 'orderRange') { tcell.value = T.orderRange || null; return; }
+      const span = `B${R[k]}:${lastL}${R[k]}`;
+      if (ratioKeys.has(k)) setF(tcell, guard(DERIVED[k](TL), F[k](TL)), T[k] == null ? '' : T[k], fmtFor(k));
+      else setF(tcell, `IF(COUNT(${span})=${N},SUM(${span}),"")`, T[k] == null ? '' : T[k], fmtFor(k));
     });
     const s1 = dr.getRow(R._sum1).getCell(2), s2 = dr.getRow(R._sum2).getCell(2);
-    setF(s1, `SUM(B${R.netProfit}:${lastL}${R.netProfit})`, T.netProfit, NUM);
-    setF(s2, `SUM(B${R.netProfitAfterGST}:${lastL}${R.netProfitAfterGST})`, T.netProfitAfterGST, NUM);
+    const spanSum = r => `IF(COUNT(B${r}:${lastL}${r})=${N},SUM(B${r}:${lastL}${r}),"")`;
+    setF(s1, spanSum(R.netProfit), T.netProfit == null ? '' : T.netProfit, NUM);
+    setF(s2, spanSum(R.netProfitAfterGST), T.netProfitAfterGST == null ? '' : T.netProfitAfterGST, NUM);
 
     // styling
     dr.getColumn(1).width = 44;
@@ -252,6 +291,8 @@
     // ---------------- Countrywise Sales ----------------
     const cw = ws.CW;
     const cs = opts.countrySummary;
+    if (!has.revenue) notUploaded(cw, 'Net payments / Total sales');
+    else {
     cw.getCell('B1').value = periodText; cw.getCell('B1').font = { bold: true };
     cw.getRow(3).values = [, 'Country', 'Revenue (ex GST)', 'Percentage (ex GST)'];
     headerRow(cw.getRow(3));
@@ -270,10 +311,13 @@
     setF(cw.getCell(`C${cwTot + 2}`), `ROUND(C${cwTot}-${q(S.DR)}!${TL}${R.productRevenue},2)`, round2(cs.total - T.productRevenue), NUM);
     cw.getCell(`B${cwTot + 2}`).font = { italic: true, color: { argb: 'FF666666' } };
     cw.getColumn(1).width = 3; cw.getColumn(2).width = 40; cw.getColumn(3).width = 18; cw.getColumn(4).width = 20;
+    }
 
     // ---------------- Productwise Sales ----------------
     const pw = ws.PW;
     const ps = opts.productSummary;
+    if (!has.sales || !ps.rows.length) notUploaded(pw, 'The Total sales export');
+    else {
     pw.getCell('B1').value = periodText; pw.getCell('B1').font = { bold: true };
     pw.getRow(2).values = ['', 'Product title', 'Gross sales (A$)', 'Discounts', 'Refunds', 'Net sales (A$)', 'Share of gross sales', 'Share of net sales'];
     headerRow(pw.getRow(2));
@@ -295,17 +339,27 @@
     ['C', 'D', 'E', 'F'].forEach(x => pw.getColumn(x).numFmt = NUM);
     [3, 38, 16, 14, 14, 16, 18, 18].forEach((w, i) => pw.getColumn(i + 1).width = w);
     pw.views = [{ state: 'frozen', ySplit: 2 }];
+    }
 
     // ---------------- Difference COGS ----------------
     const df = ws.DIFF;
     df.addRow(['COGS Difference', ...dates.map(utcDate), 'Period total']);
-    const dRows = [['Supplier COGS (product + shipping)', i => `${q(S.DR)}!${L(i)}${R.cogsProduct}+${q(S.DR)}!${L(i)}${R.cogsShipping}`, x => round2(x.cogsProduct + x.cogsShipping)],
-      ['COGS Shopify', i => `${q(S.DR)}!${L(i)}${R.cogsShopify}`, x => x.cogsShopify],
-      ['Difference (Supplier − Shopify)', i => `${L(i)}2-${L(i)}3`, x => round2(x.cogsProduct + x.cogsShipping - x.cogsShopify)]];
-    dRows.forEach(([label, f, v], k) => {
+    const drCell = (i, row) => `${q(S.DR)}!${L(i)}${row}`;
+    const dRows = [
+      ['Supplier COGS (product + shipping)', i => `${drCell(i, R.cogsProduct)}+${drCell(i, R.cogsShipping)}`,
+        x => x.cogsProduct == null ? null : round2(x.cogsProduct + x.cogsShipping), i => [drCell(i, R.cogsProduct), drCell(i, R.cogsShipping)]],
+      ['COGS Shopify', i => drCell(i, R.cogsShopify), x => x.cogsShopify, i => [drCell(i, R.cogsShopify)]],
+      ['Difference (Supplier − Shopify)', i => `${L(i)}2-${L(i)}3`,
+        x => (x.cogsProduct == null || x.cogsShopify == null) ? null : round2(x.cogsProduct + x.cogsShipping - x.cogsShopify), i => [`${L(i)}2`, `${L(i)}3`]]];
+    dRows.forEach(([label, f, v, inputs]) => {
       const r = df.addRow([label]);
-      rows.forEach((x, i) => setF(r.getCell(i + 2), f(i), v(x), NUM));
-      setF(r.getCell(TC), `SUM(B${r.number}:${lastL}${r.number})`, round2(rows.reduce((z, x) => z + v(x), 0)), NUM);
+      rows.forEach((x, i) => {
+        const val = v(x);
+        setF(r.getCell(i + 2), `IF(COUNT(${inputs(i).join(',')})=${inputs(i).length},${f(i)},"")`, val == null ? '' : val, NUM);
+      });
+      const span = `B${r.number}:${lastL}${r.number}`;
+      const tot = rows.some(x => v(x) == null) ? '' : round2(rows.reduce((z, x) => z + v(x), 0));
+      setF(r.getCell(TC), `IF(COUNT(${span})=${N},SUM(${span}),"")`, tot, NUM);
     });
     headerRow(df.getRow(1));
     df.getRow(1).eachCell((c, n) => { if (n > 1 && n < TC) c.numFmt = 'd-mmm-yyyy'; });
@@ -314,6 +368,8 @@
 
     // ---------------- Journal Entries ----------------
     const je = ws.JE;
+    if (!has.revenue && !has.merchant) notUploaded(je, 'Net payments / Total sales and the merchant workbook');
+    else {
     je.addRow(['Date', 'Account code', 'Account', 'Debit (A$)', 'Credit (A$)', 'Description']);
     headerRow(je.getRow(1));
     const gw = result.salesResult.config.gateways;
@@ -345,40 +401,45 @@
     ['D', 'E'].forEach(x => je.getColumn(x).numFmt = NUM);
     [13, 12, 34, 15, 15, 40].forEach((w, i) => je.getColumn(i + 1).width = w);
     je.views = [{ state: 'frozen', ySplit: 1 }];
+    }
 
     // ---------------- Ratio Calculation Sheet ----------------
     const ra = ws.RATIO;
     const DRT = k => `${q(S.DR)}!${TL}${R[k]}`;
-    const cogsT = round2(T.cogsProduct + T.cogsShipping);
+    const cogsT = T.cogsProduct == null ? null : round2(T.cogsProduct + T.cogsShipping);
+    const n2 = (...xs) => xs.some(v => v == null) ? null : xs;
     const ratioRows = [
       ['h', '1. Gross Profit (GP) & Gross Profit Margin'],
-      ['Revenue (ex GST)', DRT('totalRevenue'), T.totalRevenue, NUM],
-      ['Cost of Goods Sold (Supplier COGS)', `${DRT('cogsProduct')}+${DRT('cogsShipping')}`, cogsT, NUM],
-      ['Gross Profit = Revenue − COGS', 'B3-B4', round2(T.totalRevenue - cogsT), NUM],
-      ['Gross Profit Margin = Gross Profit ÷ Revenue', 'IFERROR(B5/B3,0)', T.totalRevenue ? (T.totalRevenue - cogsT) / T.totalRevenue : 0, PCT],
+      ['Revenue (ex GST)', DRT('totalRevenue'), [DRT('totalRevenue')], T.totalRevenue, NUM],
+      ['Cost of Goods Sold (Supplier COGS)', `${DRT('cogsProduct')}+${DRT('cogsShipping')}`, [DRT('cogsProduct'), DRT('cogsShipping')], cogsT, NUM],
+      ['Gross Profit = Revenue − COGS', 'B3-B4', ['B3', 'B4'], (T.totalRevenue == null || cogsT == null) ? null : round2(T.totalRevenue - cogsT), NUM],
+      ['Gross Profit Margin = Gross Profit ÷ Revenue', 'B5/B3', ['B5', 'B3'], (T.totalRevenue && cogsT != null) ? (T.totalRevenue - cogsT) / T.totalRevenue : null, PCT],
       [],
       ['h', '2. Net Profit & Net Profit Margin'],
-      ['Net Profit (as per Supplier COGS)', DRT('netProfit'), T.netProfit, NUM],
-      ['Net Profit Margin = Net Profit ÷ Revenue', 'IFERROR(B9/B3,0)', T.profitMargin, PCT],
-      ['Net Profit After GST remittance (cash view)', DRT('netProfitAfterGST'), T.netProfitAfterGST, NUM],
-      ['Cash-view margin after GST remittance', 'IFERROR(B11/B3,0)', T.totalRevenue ? T.netProfitAfterGST / T.totalRevenue : 0, PCT],
+      ['Net Profit (as per Supplier COGS)', DRT('netProfit'), [DRT('netProfit')], T.netProfit, NUM],
+      ['Net Profit Margin = Net Profit ÷ Revenue', 'B9/B3', ['B9', 'B3'], T.profitMargin, PCT],
+      ['Net Profit After GST remittance (cash view)', DRT('netProfitAfterGST'), [DRT('netProfitAfterGST')], T.netProfitAfterGST, NUM],
+      ['Cash-view margin after GST remittance', 'B11/B3', ['B11', 'B3'], (T.totalRevenue && T.netProfitAfterGST != null) ? T.netProfitAfterGST / T.totalRevenue : null, PCT],
       [],
       ['h', '3. Cost of Goods Sold (COGS) Ratio'],
-      ['COGS Ratio = COGS ÷ Revenue', 'IFERROR(B4/B3,0)', T.totalRevenue ? cogsT / T.totalRevenue : 0, PCT],
+      ['COGS Ratio = COGS ÷ Revenue', 'B4/B3', ['B4', 'B3'], (T.totalRevenue && cogsT != null) ? cogsT / T.totalRevenue : null, PCT],
       [],
       ['h', '4. Operating Expense Ratio'],
-      ['Operating Expenses = Merchant fees + Advertising', `${DRT('merchantFees')}+${DRT('adSpend')}`, round2(T.merchantFees + T.adSpend), NUM],
-      ['Operating Expense Ratio = Operating Expenses ÷ Revenue', 'IFERROR(B18/B3,0)', T.totalRevenue ? (T.merchantFees + T.adSpend) / T.totalRevenue : 0, PCT],
+      ['Operating Expenses = Merchant fees + Advertising', `${DRT('merchantFees')}+${DRT('adSpend')}`, [DRT('merchantFees'), DRT('adSpend')],
+        (T.merchantFees == null || T.adSpend == null) ? null : round2(T.merchantFees + T.adSpend), NUM],
+      ['Operating Expense Ratio = Operating Expenses ÷ Revenue', 'B18/B3', ['B18', 'B3'],
+        (T.totalRevenue && T.merchantFees != null && T.adSpend != null) ? (T.merchantFees + T.adSpend) / T.totalRevenue : null, PCT],
       [],
       ['h', '5. Advertising'],
-      ['ROAS = Revenue ÷ Ad spend', DRT('roas'), T.roas, '0.00']
+      ['ROAS = Revenue ÷ Ad spend', DRT('roas'), [DRT('roas')], T.roas, '#,##0.00']
     ];
     ratioRows.forEach((r, i) => {
       const n = i + 2;
       if (!r.length) return;
       if (r[0] === 'h') { const c = ra.getCell(`A${n}`); c.value = r[1]; c.font = { bold: true }; c.fill = fill(C.head); ra.getCell(`B${n}`).fill = fill(C.head); return; }
-      ra.getCell(`A${n}`).value = r[0];
-      setF(ra.getCell(`B${n}`), r[1], r[2], r[3]);
+      const [label, expr, deps, value, fmt] = r;
+      ra.getCell(`A${n}`).value = label;
+      setF(ra.getCell(`B${n}`), `IFERROR(IF(COUNT(${deps.join(',')})=${deps.length},${expr},""),"")`, value == null ? '' : value, fmt);
     });
     ra.getCell('A1').value = `Ratios for ${periodText}`; ra.getCell('A1').font = { bold: true, size: 13 };
     ra.getColumn(1).width = 54; ra.getColumn(2).width = 18;

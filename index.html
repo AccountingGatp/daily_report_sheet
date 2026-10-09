@@ -113,12 +113,14 @@ tr.sub td{font-weight:700;background:#f8f9fb}
 .summary.warn{background:var(--warn-soft);color:var(--warn)}
 .summary.err{background:var(--err-soft);color:var(--err)}
 .summary.idle{background:var(--line2);color:var(--muted)}
+.summary.info{background:var(--accent-soft);color:var(--accent)}
 .cov td,.cov th{text-align:center}
 .cov td:first-child{text-align:left;font-weight:600}
 .dot{display:inline-grid;place-items:center;width:22px;height:22px;border-radius:50%;font-size:12px;font-weight:800;cursor:default}
 .dot.ok{background:var(--ok-soft);color:var(--ok)}
 .dot.review{background:var(--warn-soft);color:var(--warn)}
 .dot.gap{background:var(--err-soft);color:var(--err)}
+.dot.none{background:var(--line2);color:var(--faint)}
 .dot.info{background:var(--accent-soft);color:var(--accent)}
 .legend{display:flex;gap:14px;font-size:12px;color:var(--muted);margin:10px 0 0}
 .issues{list-style:none;margin:14px 0 0;padding:0;display:grid;gap:6px}
@@ -126,6 +128,7 @@ tr.sub td{font-weight:700;background:#f8f9fb}
 .issues li b{flex:none;min-width:150px}
 .issues li.ERROR{background:var(--err-soft)}
 .issues li.REVIEW{background:var(--warn-soft)}
+.issues li.INFO{background:var(--line2)}
 .issues li.INFO{background:var(--accent-soft)}
 .cogsfix{margin-top:14px;border:1px solid #f0d99a;background:#fffbee;border-radius:10px;padding:12px 14px}
 .cogsfix h3{margin:0 0 4px;font-size:14px}
@@ -201,7 +204,7 @@ tr.sub td{font-weight:700;background:#f8f9fb}
 
   <!-- 2. Uploads -->
   <section class="card">
-    <div class="card-h"><div class="num">2</div><div><h2>Upload source files</h2><p>Files are recognised by their columns, not their names. You can drop all six at once.</p></div></div>
+    <div class="card-h"><div class="num">2</div><div><h2>Upload source files</h2><p>No file is mandatory. Upload what you have — anything missing is simply left blank in the report, never estimated. Files are recognised by their columns, not their names.</p></div></div>
     <div class="dropall" id="dropAll">Drop all files here, or use the boxes below</div>
     <div class="uploads" id="uploads"></div>
   </section>
@@ -225,10 +228,10 @@ tr.sub td{font-weight:700;background:#f8f9fb}
   <!-- 5. Preview & download -->
   <section class="card">
     <div class="card-h"><div class="num">5</div><div><h2>Preview &amp; download</h2><p>Key rows of the Daily Reporting sheet. The Excel file has the full report with live formulas.</p></div></div>
-    <div id="results"><p class="muted small">The preview appears once the required files are loaded.</p></div>
+    <div id="results"><p class="muted small">The preview appears once a source file is loaded.</p></div>
     <div class="dl-row">
       <button class="btn btn-primary" id="download" type="button" disabled>⬇ Download daily report (.xlsx)</button>
-      <span class="muted small" id="dlNote">Needs Total sales, Net payments, COGS, COGS Shopify and Merchant fees.</span>
+      <span class="muted small" id="dlNote">No file is mandatory — upload what you have.</span>
     </div>
   </section>
 </main>
@@ -244,7 +247,7 @@ tr.sub td{font-weight:700;background:#f8f9fb}
     <h3 id="sop-workflow">Quick workflow</h3>
     <ol>
       <li>Choose the <b>report period</b> (From / To). Use the same dates for every export.</li>
-      <li>Collect the <b>six source files</b> for that period — where each one comes from is listed below.</li>
+      <li>Collect the source files for that period — where each one comes from is listed below. None of them is mandatory: whatever you upload is calculated, and the rest of the report is left blank.</li>
       <li><b>Upload</b> them in step 2. You can drop them all at once; each is matched to its box automatically.</li>
       <li>Enter or paste the daily <b>advertising spend</b> in step 3 — or leave it blank and fill it in the Excel file later.</li>
       <li>Check the <b>Overview</b>: every source should be green for every date. Fix anything amber or red.</li>
@@ -252,7 +255,7 @@ tr.sub td{font-weight:700;background:#f8f9fb}
     </ol>
 
     <h3>File sources</h3>
-    <p class="muted small">Six uploads power the report. Three are exported straight from Shopify; three come from the other Saint tools.</p>
+    <p class="muted small">Six uploads power the report. Three are exported straight from Shopify; three come from the other Saint tools. Each one is optional — a missing file only blanks its own rows and anything derived from them.</p>
 
     <div class="src-card" id="sop-cogs">
       <h4>1. COGS (supplier) <span class="fmt">Excel · .xlsx</span></h4>
@@ -337,7 +340,7 @@ tr.sub td{font-weight:700;background:#f8f9fb}
 
     <h3 id="sop-after">After uploading</h3>
     <ol>
-      <li><b>Overview</b> shows Ready / Gaps for every source and date. Green = OK, amber = check it, red = missing.</li>
+      <li><b>Overview</b> shows Ready / Gaps for every source and date. Green = OK, amber = check it, red = a gap in an uploaded file, grey dash = not uploaded (those rows stay blank).</li>
       <li><b>Preview</b> shows the main Daily Reporting rows for the period.</li>
       <li><b>Download</b> gives an Excel workbook with these sheets:
         <table style="margin-top:6px">
@@ -402,12 +405,12 @@ document.querySelectorAll('.drawer-nav a').forEach(a => a.onclick = e => { e.pre
 
 /* ---------- Upload slots ---------- */
 const SLOTS = [
-  { id: 'cogs', n: 1, title: 'COGS', fmt: 'Excel', accept: '.xlsx,.xls', src: 'From the SAINT COGS tool (processed supplier file).', sop: 'sop-cogs', required: true },
-  { id: 'shopCogs', n: 2, title: 'COGS Shopify', fmt: 'CSV', accept: '.csv', src: 'Shopify → Reports → Cost of goods sold.', sop: 'sop-shopcogs', required: true },
-  { id: 'merchant', n: 3, title: 'Merchant fees', fmt: 'Excel', accept: '.xlsx,.xls', src: 'From the Saint Merchant tool.', sop: 'sop-merchant', required: true },
+  { id: 'cogs', n: 1, title: 'COGS', fmt: 'Excel', accept: '.xlsx,.xls', src: 'From the SAINT COGS tool (processed supplier file).', sop: 'sop-cogs', required: false },
+  { id: 'shopCogs', n: 2, title: 'COGS Shopify', fmt: 'CSV', accept: '.csv', src: 'Shopify → Reports → Cost of goods sold.', sop: 'sop-shopcogs', required: false },
+  { id: 'merchant', n: 3, title: 'Merchant fees', fmt: 'Excel', accept: '.xlsx,.xls', src: 'From the Saint Merchant tool.', sop: 'sop-merchant', required: false },
   { id: 'recon', n: 4, title: 'Sales reconciliation', fmt: 'CSV/XLSX', accept: '.csv,.xlsx,.xls', src: 'From the Sales Journal tool. Used as a cross-check.', sop: 'sop-recon', required: false },
-  { id: 'net', n: 5, title: 'Net payments', fmt: 'CSV', accept: '.csv', src: 'Shopify → Reports → Net payments by order.', sop: 'sop-net', required: true },
-  { id: 'sales', n: 6, title: 'Total sales', fmt: 'CSV', accept: '.csv', src: 'Shopify → Reports → Total sales by order.', sop: 'sop-sales', required: true }
+  { id: 'net', n: 5, title: 'Net payments', fmt: 'CSV', accept: '.csv', src: 'Shopify → Reports → Net payments by order.', sop: 'sop-net', required: false },
+  { id: 'sales', n: 6, title: 'Total sales', fmt: 'CSV', accept: '.csv', src: 'Shopify → Reports → Total sales by order.', sop: 'sop-sales', required: false }
 ];
 const files = {};               // id → { name, data, info } | { name, error } | { busy }
 const cogsOverrides = {};
@@ -417,7 +420,7 @@ function renderSlots() {
   $('uploads').innerHTML = SLOTS.map(s => {
     const f = files[s.id];
     const cls = f?.data ? 'ok' : f?.error ? 'bad' : '';
-    const state = f?.busy ? '<span class="state busy">Reading…</span>' : f?.data ? '<span class="state ok">✓ Loaded</span>' : f?.error ? '<span class="state bad">✕ Check file</span>' : `<span class="state wait">${s.required ? 'Required' : 'Recommended'}</span>`;
+    const state = f?.busy ? '<span class="state busy">Reading…</span>' : f?.data ? '<span class="state ok">✓ Loaded</span>' : f?.error ? '<span class="state bad">✕ Check file</span>' : `<span class="state wait">Optional</span>`;
     const body = f?.data ? `<div class="file">${esc(f.name)}<br><span class="muted">${esc(f.info || '')}</span></div>` : f?.error ? `<div class="file err">${esc(f.name ? f.name + ': ' : '')}${esc(f.error)}</div>` : `<p class="src">${esc(s.src)}</p>`;
     return `<div class="up ${cls}" data-slot="${s.id}">
       <div class="up-top"><span class="num" style="width:22px;height:22px;font-size:12px">${s.n}</span><strong>${s.title}</strong><span class="fmt">${s.fmt}</span>${state}</div>
@@ -573,20 +576,34 @@ $('adClear').onclick = () => { if (confirm('Clear all advertising spend values?'
 
 /* ---------- Recalculate ---------- */
 function scheduleRecalc() { clearTimeout(recalcTimer); recalcTimer = setTimeout(recalc, 250); }
-const REQUIRED = SLOTS.filter(s => s.required).map(s => s.id);
+const BLANK_IF_MISSING = {
+  sales: 'order range, orders, gross sales, discounts, returns, net sales, shipping, rounding and total sales',
+  net: 'product revenue, shipping revenue, refunds, total revenue and the GST rows',
+  cogs: 'supplier product and shipping COGS',
+  shopCogs: 'COGS Shopify',
+  merchant: 'merchant fees and GST on fees'
+};
 function recalc() {
   current = null; issues = [];
   const ds = periodDates();
-  const missing = SLOTS.filter(s => s.required && !files[s.id]?.data);
-  if (!ds || ds.error || missing.length) {
-    const msg = !ds ? 'Set the report period.' : ds.error ? ds.error : `Waiting for: ${missing.map(s => s.title).join(', ')}.`;
-    setSummary('idle', msg); $('coverage').innerHTML = ''; $('issues').innerHTML = ''; $('cogsFix').innerHTML = '';
-    $('results').innerHTML = '<p class="muted small">The preview appears once the required files are loaded.</p>';
-    $('download').disabled = true; $('dlNote').textContent = 'Needs Total sales, Net payments, COGS, COGS Shopify and Merchant fees.';
+  const loaded = SLOTS.filter(x => files[x.id]?.data);
+  if (!ds || ds.error || !loaded.length) {
+    setSummary('idle', !ds ? 'Set the report period.' : ds.error ? ds.error : 'Upload at least one source file. Nothing is mandatory — whatever is missing is left blank.');
+    $('coverage').innerHTML = ''; $('issues').innerHTML = ''; $('cogsFix').innerHTML = '';
+    $('results').innerHTML = '<p class="muted small">The preview appears once a source file is loaded.</p>';
+    $('download').disabled = true; $('dlNote').textContent = 'No file is mandatory — upload what you have.';
     return;
   }
   try {
-    current = E.buildDaily({ from: ds[0], to: ds.at(-1), netRows: files.net.data, salesRows: files.sales.data, shopifyCogsRows: files.shopCogs.data, merchantWb: files.merchant.data, cogsWb: files.cogs.data, adSpend: adSpendObj(), cogsOverrides, reconRows: reconRows() });
+    current = E.buildDaily({
+      from: ds[0], to: ds.at(-1),
+      netRows: files.net?.data || null,
+      salesRows: files.sales?.data || null,
+      shopifyCogsRows: files.shopCogs?.data || null,
+      merchantWb: files.merchant?.data || null,
+      cogsWb: files.cogs?.data || null,
+      adSpend: adSpendObj(), cogsOverrides, reconRows: reconRows()
+    });
     issues = E.validate(current);
   } catch (e) {
     setSummary('err', e.message); $('download').disabled = true; $('results').innerHTML = ''; $('coverage').innerHTML = ''; $('issues').innerHTML = ''; return;
@@ -594,7 +611,10 @@ function recalc() {
   renderOverview(); renderResults();
   const errs = issues.filter(i => i.severity === 'ERROR').length;
   $('download').disabled = errs > 0;
-  $('dlNote').textContent = errs ? 'Fix the red items first.' : issues.length ? 'You can download now — amber items are listed on the “Checks & Notes” sheet.' : 'Everything checks out.';
+  const absent = Object.entries(BLANK_IF_MISSING).filter(([k]) => !current.has[k]).map(([, v]) => v);
+  $('dlNote').textContent = errs ? 'Fix the red items first.'
+    : absent.length ? `Will be left blank: ${absent.join('; ')}. Everything else is calculated in full.`
+    : 'All sources loaded — every row is calculated.';
 }
 function reconRows() {
   const f = files.recon?.data; if (!f) return null;
@@ -607,7 +627,12 @@ function setSummary(cls, text) { const el = $('summary'); el.className = 'summar
 function renderOverview() {
   const cov = E.coverage(current), ds = current.dates;
   const errs = issues.filter(i => i.severity === 'ERROR').length, rev = issues.filter(i => i.severity === 'REVIEW').length;
-  setSummary(errs ? 'err' : rev ? 'warn' : 'ok', errs ? `${errs} gap(s) must be fixed before download.` : rev ? `Ready to download · ${rev} item(s) to review` : `Ready — all sources cover all ${ds.length} day(s).`);
+  const absent = E.SOURCES.filter(src => Object.values(cov[src]).every(v => v.s === 'none')).length;
+  setSummary(errs ? 'err' : rev ? 'warn' : absent ? 'info' : 'ok',
+    errs ? `${errs} gap(s) must be fixed before download.`
+      : rev ? `Ready to download · ${rev} item(s) to review`
+      : absent ? `Ready — calculated from what was uploaded. ${absent} source(s) not uploaded; those rows stay blank.`
+      : `Ready — all sources cover all ${ds.length} day(s).`);
   let h = '<div class="tbl-wrap"><table class="cov"><thead><tr><th>Source</th>' + ds.map(d => `<th>${short(d)}</th>`).join('') + '</tr></thead><tbody>';
   E.SOURCES.forEach(src => {
     h += `<tr><td>${src}</td>` + ds.map(d => { const c = cov[src][d]; const sym = c.s === 'ok' ? '✓' : c.s === 'gap' ? '✕' : c.s === 'info' ? '–' : '!'; return `<td><span class="dot ${c.s}" title="${esc(src + ' · ' + d + (c.why ? ' — ' + c.why : ''))}">${sym}</span></td>`; }).join('') + '</tr>';
@@ -635,9 +660,10 @@ function renderOverview() {
 function renderResults() {
   const T = current.totals;
   const kpi = (k, v, cls = '') => `<div class="kpi"><div class="k">${k}</div><div class="v ${cls}">${v}</div></div>`;
-  let h = '<div class="kpis">' + kpi('Total sales', 'A$' + money(T.totalSales)) + kpi('Revenue ex GST', 'A$' + money(T.totalRevenue)) +
-    kpi('Net profit (accounting)', 'A$' + money(T.netProfit), T.netProfit < 0 ? 'neg' : '') + kpi('Cash after GST remittance', 'A$' + money(T.netProfitAfterGST), T.netProfitAfterGST < 0 ? 'neg' : '') +
-    kpi('ROAS', T.adSpend ? T.roas.toFixed(2) + '×' : '—') + '</div>';
+  const amount = v => v == null ? '<span class="muted">—</span>' : 'A$' + money(v);
+  let h = '<div class="kpis">' + kpi('Total sales', amount(T.totalSales)) + kpi('Revenue ex GST', amount(T.totalRevenue)) +
+    kpi('Net profit (accounting)', amount(T.netProfit), T.netProfit < 0 ? 'neg' : '') + kpi('Cash after GST remittance', amount(T.netProfitAfterGST), T.netProfitAfterGST < 0 ? 'neg' : '') +
+    kpi('ROAS', T.roas == null ? '<span class="muted">—</span>' : T.roas.toFixed(2) + '×') + '</div>';
   const R = [
     ['sec', 'Sales'], ['orderRange', 'Order range', 't'], ['numberOrders', 'Number of orders', 'i'], ['gross', 'Gross sales'], ['discounts', 'Discounts'], ['returns', 'Returns'], ['totalSales', 'Total sales', 'hl'],
     ['sec', 'Revenue (ex GST)'], ['productRevenue', 'Product revenue'], ['shippingAU', 'Shipping revenue – AU'], ['shippingOther', 'Shipping revenue – others'], ['refundExGST', 'Refund ex GST'], ['totalRevenue', 'Total revenue', 'hl'],
@@ -645,7 +671,9 @@ function renderResults() {
     ['sec', 'Profit'], ['netProfit', 'Net profit (supplier COGS)', 'hl'], ['profitMargin', 'Profit margin', 'p'], ['roas', 'ROAS', 'r'],
     ['sec', 'GST'], ['gstSales', 'GST on sales'], ['gstShipping', 'GST on shipping'], ['gstFee', 'GST on fees'], ['gstRefundAU', 'GST on AU refunds'], ['netGST', 'Net GST'], ['netProfitAfterGST', 'Cash after GST remittance (Net profit − Net GST)', 'hl']
   ];
-  const cell = (v, t) => t === 't' ? esc(v) : t === 'i' ? Number(v).toLocaleString() : t === 'p' ? (v * 100).toFixed(2) + '%' : t === 'r' ? (v ? v.toFixed(2) : '—') : `<span class="${v < 0 ? 'neg' : ''}">${money(v)}</span>`;
+  const cell = (v, t) => v == null || v === '' ? '<span class="muted">—</span>'
+    : t === 't' ? esc(v) : t === 'i' ? Number(v).toLocaleString() : t === 'p' ? (v * 100).toFixed(2) + '%'
+    : t === 'r' ? v.toFixed(2) : `<span class="${v < 0 ? 'neg' : ''}">${money(v)}</span>`;
   h += '<div class="tbl-wrap"><table class="preview"><thead><tr><th>Metric</th>' + current.dates.map(d => `<th>${short(d)}</th>`).join('') + '<th>Total</th></tr></thead><tbody>';
   R.forEach(([k, label, t]) => {
     if (k === 'sec') { h += `<tr class="sec"><td colspan="${current.dates.length + 2}">${label}</td></tr>`; return; }

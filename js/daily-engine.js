@@ -333,58 +333,105 @@
   }
 
   // ---------- Build ----------
+  const EMPTY_SALES_RESULT = { reconciliationRows: [], reconciliationColumns: ['Date'], countries: [], journalLineRows: [], journalRows: [], xeroRows: [], audits: [], netRows: [], salesRows: [], summaryRows: [], metrics: {} };
+
+  /**
+   * Every source is optional. Anything a missing file would make unreliable is returned as null,
+   * never as 0 — so the report can be built from whatever is available without inventing figures.
+   */
   function buildDaily({ from, to, netRows, salesRows, shopifyCogsRows, merchantWb, cogsWb, adSpend = {}, cogsOverrides = {}, reconRows = null }) {
     if (!SalesEngine) throw new Error('Sales engine did not load.');
     const dates = dateRange(from, to);
-    const salesAgg = aggregateSales(salesRows, dates);
-    const shop = aggregateShopifyCogs(shopifyCogsRows, dates);
-    const merchant = parseMerchantWorkbook(merchantWb, dates);
-    const cogsParsed = parseCogsWorkbook(cogsWb, dates, cogsOverrides);
-    const salesResult = SalesEngine.process(netRows, salesRows, null);
+    const has = {
+      sales: !!(salesRows && salesRows.length),
+      net: !!(netRows && netRows.length),
+      cogs: !!cogsWb,
+      shopCogs: !!(shopifyCogsRows && shopifyCogsRows.length),
+      merchant: !!merchantWb,
+      recon: !!(reconRows && reconRows.length)
+    };
+    // The revenue split needs Net payments (country, gateway) and Total sales (shipping, tax) together.
+    has.revenue = has.net && has.sales;
+
+    const salesAgg = has.sales ? aggregateSales(salesRows, dates) : null;
+    const shop = has.shopCogs ? aggregateShopifyCogs(shopifyCogsRows, dates) : null;
+    const merchant = has.merchant ? parseMerchantWorkbook(merchantWb, dates) : { daily: Object.fromEntries(dates.map(d => [d, { exGST: 0, gst: 0, inclGST: 0, platforms: {} }])), rows: [] };
+    const cogsParsed = has.cogs ? parseCogsWorkbook(cogsWb, dates, cogsOverrides) : { byDate: {}, unpriced: [] };
+    const salesResult = has.revenue ? SalesEngine.process(netRows, salesRows, null) : Object.assign({ config: SalesEngine.DEFAULT_CONFIG }, EMPTY_SALES_RESULT);
     const recByDate = new Map(salesResult.reconciliationRows.map(r => [r.Date, r]));
     const countries = salesResult.countries || [];
+    // Counted from the uploaded file itself, so it stays meaningful even when the revenue split can't run.
     const netRowsByDate = Object.fromEntries(dates.map(d => [d, 0]));
-    salesResult.netRows.forEach(r => { if (r.day in netRowsByDate) netRowsByDate[r.day]++; });
+    (netRows || []).forEach(r => { const d = isoDate(pick(r, ['Day', 'Date'])); if (d in netRowsByDate) netRowsByDate[d]++; });
+
+    const add = (...xs) => xs.some(v => v == null) ? null : round2(xs.reduce((z, v) => z + v, 0));
+    const div = (a, b) => (a == null || b == null || !b) ? null : a / b;
 
     const rows = dates.map(d => {
-      const s = salesAgg[d], r = recByDate.get(d) || {}, c = cogsParsed.byDate[d], m = merchant.daily[d], a = adSpend[d] || {};
+      const s = salesAgg ? salesAgg[d] : null;
+      const r = recByDate.get(d) || {};
+      const c = has.cogs ? cogsParsed.byDate[d] : null;
+      const m = merchant.daily[d];
+      const a = adSpend[d] || {};
       const sumC = prefix => countries.reduce((z, k) => z + (r[`${prefix} (${k})`] || 0), 0);
-      const productRevenue = round2((r['Sales Revenue (Australia)'] || 0) + sumC('Sales Revenue'));
-      const shippingAU = round2(r['Shipping (Australia, excl. GST)'] || 0);
-      const shippingOther = round2(sumC('Shipping'));
-      const gstRefundAU = round2(-(r['GST on Refund'] || 0));             // positive
-      const refundExGST = round2(-((r['Refunds (Australia, excl. GST)'] || 0) + sumC('Refunds')));
-      const refund = round2(refundExGST + gstRefundAU);                    // incl. AU GST
-      const totalRevenue = round2(productRevenue + shippingAU + shippingOther - refundExGST);
-      const grossProfit = round2(totalRevenue - c.productAUD - c.shippingAUD);
+
+      // --- sales block (Total sales file) ---
+      const gross = s ? s.gross : null, discounts = s ? s.discounts : null, returns = s ? s.returns : null;
+      const shipping = s ? s.shipping : null, roundingTax = s ? s.taxes : null;
+      const netSales = add(gross, discounts, returns);
+      const totalSales = add(netSales, shipping, roundingTax);
+
+      // --- revenue block (Net payments + Total sales) ---
+      const productRevenue = has.revenue ? round2((r['Sales Revenue (Australia)'] || 0) + sumC('Sales Revenue')) : null;
+      const shippingAU = has.revenue ? round2(r['Shipping (Australia, excl. GST)'] || 0) : null;
+      const shippingOther = has.revenue ? round2(sumC('Shipping')) : null;
+      const gstRefundAU = has.revenue ? round2(-(r['GST on Refund'] || 0)) : null;      // positive
+      const refundExGST = has.revenue ? round2(-((r['Refunds (Australia, excl. GST)'] || 0) + sumC('Refunds'))) : null;
+      const refund = add(refundExGST, gstRefundAU);
+      const totalRevenue = (productRevenue == null) ? null : round2(productRevenue + shippingAU + shippingOther - refundExGST);
+      const gstSales = has.revenue ? round2(r['GST on Sales'] || 0) : null;
+      const gstShipping = has.revenue ? round2(r['GST on Shipping'] || 0) : null;
+
+      // --- costs ---
+      const cogsProduct = c ? c.productAUD : null, cogsShipping = c ? c.shippingAUD : null;
+      const cogsShopify = shop ? shop.byDate[d] : null;
+      const grossProfit = (totalRevenue == null || cogsProduct == null) ? null : round2(totalRevenue - cogsProduct - cogsShipping);
+      const merchantFees = has.merchant ? m.exGST : null;
+      const gstFee = has.merchant ? m.gst : null;
+
+      // --- advertising: blank until at least one figure is entered for the date ---
       const ads = { meta: toNum(a.meta), google: toNum(a.google), pinterest: toNum(a.pinterest), snap: toNum(a.snap), tiktok: toNum(a.tiktok) };
-      const adTotal = round2(ads.meta + ads.google + ads.pinterest + ads.snap + ads.tiktok);
-      const netProfit = round2(grossProfit - m.exGST - adTotal);
-      // GST — output: GST on product sales (before refunds) + GST on AU shipping; input: GST on fees + GST on AU refunds.
-      const gstSales = round2(r['GST on Sales'] || 0);
-      const gstShipping = round2(r['GST on Shipping'] || 0);
-      const netGST = round2(gstSales + gstShipping - m.gst - gstRefundAU);
+      const adEntered = ['meta', 'google', 'pinterest', 'snap', 'tiktok'].some(k => a[k] !== undefined && a[k] !== null && String(a[k]).trim() !== '');
+      const adTotal = adEntered ? round2(ads.meta + ads.google + ads.pinterest + ads.snap + ads.tiktok) : null;
+
+      const netProfit = (grossProfit == null || merchantFees == null || adTotal == null) ? null : round2(grossProfit - merchantFees - adTotal);
+      const netGST = (gstSales == null || gstFee == null) ? null : round2(gstSales + gstShipping - gstFee - gstRefundAU);
+      const netProfitAfterGST = (netProfit == null || netGST == null) ? null : round2(netProfit - netGST);
+
       return {
-        date: d, orderRange: s.orderRange, numberOrders: s.orderCount,
-        gross: s.gross, discounts: s.discounts, returns: s.returns, netSales: round2(s.gross + s.discounts + s.returns),
-        shipping: s.shipping, roundingTax: s.taxes, totalSales: round2(s.gross + s.discounts + s.returns + s.shipping + s.taxes),
+        date: d, orderRange: s ? s.orderRange : '', numberOrders: s ? s.orderCount : null,
+        gross, discounts, returns, netSales, shipping, roundingTax, totalSales,
         productRevenue, shippingAU, shippingOther, refund, refundExGST, totalRevenue,
-        cogsProduct: c.productAUD, cogsShipping: c.shippingAUD, cogsShopify: shop.byDate[d], grossProfit,
-        merchantFees: m.exGST, ...ads, adSpend: adTotal, netProfit,
-        profitMargin: totalRevenue ? netProfit / totalRevenue : 0, roas: adTotal ? totalRevenue / adTotal : 0,
-        gstSales, gstShipping, gstFee: m.gst, gstRefundAU, netGST, netProfitAfterGST: round2(netProfit - netGST)
+        cogsProduct, cogsShipping, cogsShopify, grossProfit, merchantFees,
+        meta: adEntered ? ads.meta : null, google: adEntered ? ads.google : null, pinterest: adEntered ? ads.pinterest : null,
+        snap: adEntered ? ads.snap : null, tiktok: adEntered ? ads.tiktok : null,
+        adSpend: adTotal, netProfit,
+        profitMargin: div(netProfit, totalRevenue), roas: div(totalRevenue, adTotal),
+        gstSales, gstShipping, gstFee, gstRefundAU, netGST, netProfitAfterGST
       };
     });
-    const sum = k => round2(rows.reduce((z, r) => z + (Number(r[k]) || 0), 0));
+
+    // A period total is only shown when every day in the period has a figure.
+    const sum = k => rows.some(r => r[k] == null) ? null : round2(rows.reduce((z, r) => z + Number(r[k]), 0));
     const totals = {};
     ['numberOrders', 'gross', 'discounts', 'returns', 'netSales', 'shipping', 'roundingTax', 'totalSales', 'productRevenue', 'shippingAU', 'shippingOther', 'refund', 'refundExGST', 'totalRevenue', 'cogsProduct', 'cogsShipping', 'cogsShopify', 'grossProfit', 'merchantFees', 'meta', 'google', 'pinterest', 'snap', 'tiktok', 'adSpend', 'netProfit', 'gstSales', 'gstShipping', 'gstFee', 'gstRefundAU', 'netGST', 'netProfitAfterGST'].forEach(k => totals[k] = sum(k));
-    totals.profitMargin = totals.totalRevenue ? totals.netProfit / totals.totalRevenue : 0;
-    totals.roas = totals.adSpend ? totals.totalRevenue / totals.adSpend : 0;
+    totals.profitMargin = div(totals.netProfit, totals.totalRevenue);
+    totals.roas = div(totals.totalRevenue, totals.adSpend);
     const withRange = rows.filter(r => r.orderRange);
     totals.orderRange = withRange.length ? `${withRange[0].orderRange.split('-')[0]}-${withRange.at(-1).orderRange.split('-')[1]}` : '';
 
     const reconCheck = compareRecon(reconRows, salesResult, dates);
-    return { dates, rows, totals, salesResult, salesAgg, merchant, cogs: cogsParsed.byDate, cogsUnpriced: cogsParsed.unpriced, shopCogs: shop.byDate, shopCogsRows: shop.rowsByDate, netRowsByDate, reconCheck, reconUploaded: !!(reconRows && reconRows.length), adSpendEntered: rows.some(r => r.adSpend > 0) };
+    return { dates, rows, totals, has, salesResult, salesAgg, merchant, cogs: cogsParsed.byDate, cogsUnpriced: cogsParsed.unpriced, shopCogs: shop ? shop.byDate : {}, shopCogsRows: shop ? shop.rowsByDate : {}, netRowsByDate, reconCheck, reconUploaded: !!(reconRows && reconRows.length), adSpendEntered: rows.some(r => r.adSpend > 0) };
   }
 
   // ---------- Summaries for the workbook ----------
@@ -423,24 +470,32 @@
   const SOURCES = ['Total sales', 'Net payments', 'Sales reconciliation', 'COGS', 'COGS Shopify', 'Merchant fees', 'Ad spend'];
   const GATEWAY_TO_PLATFORM = { 'Shopify Payments': 'Shopify', 'PayPal': 'Paypal', 'Afterpay': 'Afterpay' };
 
-  /** Per-source, per-date status: 'ok' | 'review' | 'gap', plus a short reason. */
+  /** Per-source, per-date status: 'ok' | 'review' | 'gap' | 'none' (not uploaded), plus a reason. */
   function coverage(result) {
     const cov = {};
     SOURCES.forEach(s => cov[s] = {});
+    const has = result.has || {};
     const recBy = new Map(result.salesResult.reconciliationRows.map(r => [r.Date, r]));
     const reconDiffDates = new Set(result.reconCheck.diffs.map(x => x.date));
+    const none = why => ({ s: 'none', why: why || 'Not uploaded — these rows are left blank' });
     for (const r of result.rows) {
       const d = r.date, rec = recBy.get(d) || {};
-      cov['Total sales'][d] = result.salesAgg[d].rows ? { s: 'ok' } : { s: 'gap', why: 'No rows for this date' };
-      cov['Net payments'][d] = result.netRowsByDate[d] ? { s: 'ok' } : { s: 'gap', why: 'No rows for this date' };
-      cov['Sales reconciliation'][d] = !result.reconUploaded ? { s: 'review', why: 'Not uploaded (report still calculated from Shopify files)' } : reconDiffDates.has(d) ? { s: 'review', why: 'Differs from recalculation' } : { s: 'ok' };
-      const c = result.cogs[d];
-      cov['COGS'][d] = c.status === 'Ready' ? { s: 'ok', why: c.note } : { s: c.status === 'Missing' ? 'gap' : 'review', why: c.note };
-      cov['COGS Shopify'][d] = result.shopCogsRows[d] ? { s: 'ok' } : { s: 'gap', why: 'No rows for this date' };
-      const pl = result.merchant.daily[d].platforms;
-      const missing = Object.entries(GATEWAY_TO_PLATFORM).filter(([g, p]) => Math.abs(rec[g] || 0) > 0.005 && !pl[p]).map(([, p]) => p);
-      cov['Merchant fees'][d] = !Object.keys(pl).length ? { s: 'gap', why: 'No fee rows for this date' } : missing.length ? { s: 'review', why: `Missing ${missing.join(', ')} fees` } : { s: 'ok' };
-      cov['Ad spend'][d] = r.adSpend > 0 ? { s: 'ok' } : { s: 'info', why: 'Left blank — fill in manually in the Excel file' };
+      cov['Total sales'][d] = !has.sales ? none() : result.salesAgg[d].rows ? { s: 'ok' } : { s: 'gap', why: 'No rows for this date' };
+      cov['Net payments'][d] = !has.net ? none()
+        : !result.netRowsByDate[d] ? { s: 'gap', why: 'No rows for this date' }
+        : !has.sales ? { s: 'review', why: 'Uploaded, but the revenue split also needs Total sales — revenue and GST rows left blank' }
+        : { s: 'ok' };
+      cov['Sales reconciliation'][d] = !has.recon ? none('Not uploaded — cross-check skipped') : reconDiffDates.has(d) ? { s: 'review', why: 'Differs from recalculation' } : { s: 'ok' };
+      const c = has.cogs ? result.cogs[d] : null;
+      cov['COGS'][d] = !c ? none() : c.status === 'Ready' ? { s: 'ok', why: c.note } : { s: c.status === 'Missing' ? 'gap' : 'review', why: c.note };
+      cov['COGS Shopify'][d] = !has.shopCogs ? none() : result.shopCogsRows[d] ? { s: 'ok' } : { s: 'gap', why: 'No rows for this date' };
+      if (!has.merchant) cov['Merchant fees'][d] = none();
+      else {
+        const pl = result.merchant.daily[d].platforms;
+        const missing = Object.entries(GATEWAY_TO_PLATFORM).filter(([g, p]) => Math.abs(rec[g] || 0) > 0.005 && !pl[p]).map(([, p]) => p);
+        cov['Merchant fees'][d] = !Object.keys(pl).length ? { s: 'gap', why: 'No fee rows for this date' } : missing.length ? { s: 'review', why: `Missing ${missing.join(', ')} fees` } : { s: 'ok' };
+      }
+      cov['Ad spend'][d] = r.adSpend != null ? { s: 'ok' } : none('Not entered — fill the ad rows in the Excel file');
     }
     return cov;
   }
@@ -449,15 +504,30 @@
     const issues = [];
     const add = (severity, source, date, message) => issues.push({ severity, source, date: date || '', message });
     const cov = coverage(result);
+    const has = result.has || {};
+    const BLANKS = {
+      'Total sales': 'Order range, orders, gross sales, discounts, returns, net sales, shipping, rounding, total sales',
+      'Net payments': 'Product revenue, shipping revenue, refunds, total revenue and the GST rows',
+      'COGS': 'Supplier product and shipping COGS',
+      'COGS Shopify': 'COGS Shopify',
+      'Merchant fees': 'Merchant fees and GST on fees',
+      'Ad spend': 'The five advertising rows'
+    };
+    const notUploaded = SOURCES.filter(src => Object.values(cov[src]).every(v => v.s === 'none'));
+    notUploaded.forEach(src => {
+      const extra = src === 'Net payments' && has.net && !has.sales ? ' (the revenue split also needs Total sales)' : '';
+      add('INFO', src, '', `Not uploaded${extra}. Left blank: ${BLANKS[src] || src}. Anything that depends on it is left blank too, never estimated.`);
+    });
     for (const src of SOURCES) {
-      const bad = Object.entries(cov[src]).filter(([, v]) => v.s !== 'ok');
+      if (notUploaded.includes(src)) continue;
+      const bad = Object.entries(cov[src]).filter(([, v]) => v.s !== 'ok' && v.s !== 'none');
       if (!bad.length) continue;
       const severity = bad.every(([, v]) => v.s === 'info') ? 'INFO' : bad.some(([, v]) => v.s === 'gap') && ['Total sales', 'Net payments'].includes(src) ? 'ERROR' : 'REVIEW';
       const groups = new Map();
       bad.forEach(([d, v]) => { const k = v.why || 'Check'; if (src === 'COGS' && /no product price/.test(k)) return; if (!groups.has(k)) groups.set(k, []); groups.get(k).push(d); });
       groups.forEach((ds, why) => add(severity, src, ds.length === result.dates.length ? 'All dates' : ds.join(', '), why));
     }
-    result.dates.filter(d => result.cogs[d].rateFrom).forEach(d => add('INFO', 'COGS', d, `No FX rate for this date in the COGS file — used ${result.cogs[d].rate} from ${result.cogs[d].rateFrom}.`));
+    result.dates.filter(d => result.cogs[d] && result.cogs[d].rateFrom).forEach(d => add('INFO', 'COGS', d, `No FX rate for this date in the COGS file — used ${result.cogs[d].rate} from ${result.cogs[d].rateFrom}.`));
     result.cogsUnpriced.filter(u => u.override === 'SKIP').forEach(u => add('INFO', 'COGS', u.date, `Skipped: ${u.sku || 'SKU'}${u.order ? `, order ${u.order}` : ''} has no price in the COGS file and is counted as $0.`));
     result.cogsUnpriced.filter(u => u.override == null || u.override === '').forEach(u =>
       add('REVIEW', 'COGS', u.date, `No price for ${u.sku || 'a SKU'}${u.product ? ` (${u.product})` : ''}${u.order ? `, order ${u.order}` : ''}. Enter a USD price or choose Skip in the Overview.`));
