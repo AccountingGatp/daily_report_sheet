@@ -14,6 +14,8 @@
   'use strict';
 
   const GST_RATE = 0.10;
+  // Advertising platforms, in report order.
+  const AD_PLATFORMS = ['meta', 'google', 'pinterest', 'applovin', 'snap', 'tiktok'];
   const X = () => XLSXRef || (typeof XLSX !== 'undefined' ? XLSX : null);
 
   // ---------- small helpers ----------
@@ -400,9 +402,9 @@
       const gstFee = has.merchant ? m.gst : null;
 
       // --- advertising: blank until at least one figure is entered for the date ---
-      const ads = { meta: toNum(a.meta), google: toNum(a.google), pinterest: toNum(a.pinterest), snap: toNum(a.snap), tiktok: toNum(a.tiktok) };
-      const adEntered = ['meta', 'google', 'pinterest', 'snap', 'tiktok'].some(k => a[k] !== undefined && a[k] !== null && String(a[k]).trim() !== '');
-      const adTotal = adEntered ? round2(ads.meta + ads.google + ads.pinterest + ads.snap + ads.tiktok) : null;
+      const ads = { meta: toNum(a.meta), google: toNum(a.google), pinterest: toNum(a.pinterest), applovin: toNum(a.applovin), snap: toNum(a.snap), tiktok: toNum(a.tiktok) };
+      const adEntered = AD_PLATFORMS.some(k => a[k] !== undefined && a[k] !== null && String(a[k]).trim() !== '');
+      const adTotal = adEntered ? round2(AD_PLATFORMS.reduce((z, k) => z + ads[k], 0)) : null;
 
       const netProfit = (grossProfit == null || merchantFees == null || adTotal == null) ? null : round2(grossProfit - merchantFees - adTotal);
       const netGST = (gstSales == null || gstFee == null) ? null : round2(gstSales + gstShipping - gstFee - gstRefundAU);
@@ -414,7 +416,7 @@
         productRevenue, shippingAU, shippingOther, refund, refundExGST, totalRevenue,
         cogsProduct, cogsShipping, cogsShopify, grossProfit, merchantFees,
         meta: adEntered ? ads.meta : null, google: adEntered ? ads.google : null, pinterest: adEntered ? ads.pinterest : null,
-        snap: adEntered ? ads.snap : null, tiktok: adEntered ? ads.tiktok : null,
+        applovin: adEntered ? ads.applovin : null, snap: adEntered ? ads.snap : null, tiktok: adEntered ? ads.tiktok : null,
         adSpend: adTotal, netProfit,
         profitMargin: div(netProfit, totalRevenue), roas: div(totalRevenue, adTotal),
         gstSales, gstShipping, gstFee, gstRefundAU, netGST, netProfitAfterGST
@@ -424,7 +426,7 @@
     // A period total is only shown when every day in the period has a figure.
     const sum = k => rows.some(r => r[k] == null) ? null : round2(rows.reduce((z, r) => z + Number(r[k]), 0));
     const totals = {};
-    ['numberOrders', 'gross', 'discounts', 'returns', 'netSales', 'shipping', 'roundingTax', 'totalSales', 'productRevenue', 'shippingAU', 'shippingOther', 'refund', 'refundExGST', 'totalRevenue', 'cogsProduct', 'cogsShipping', 'cogsShopify', 'grossProfit', 'merchantFees', 'meta', 'google', 'pinterest', 'snap', 'tiktok', 'adSpend', 'netProfit', 'gstSales', 'gstShipping', 'gstFee', 'gstRefundAU', 'netGST', 'netProfitAfterGST'].forEach(k => totals[k] = sum(k));
+    ['numberOrders', 'gross', 'discounts', 'returns', 'netSales', 'shipping', 'roundingTax', 'totalSales', 'productRevenue', 'shippingAU', 'shippingOther', 'refund', 'refundExGST', 'totalRevenue', 'cogsProduct', 'cogsShipping', 'cogsShopify', 'grossProfit', 'merchantFees', 'meta', 'google', 'pinterest', 'applovin', 'snap', 'tiktok', 'adSpend', 'netProfit', 'gstSales', 'gstShipping', 'gstFee', 'gstRefundAU', 'netGST', 'netProfitAfterGST'].forEach(k => totals[k] = sum(k));
     totals.profitMargin = div(totals.netProfit, totals.totalRevenue);
     totals.roas = div(totals.totalRevenue, totals.adSpend);
     const withRange = rows.filter(r => r.orderRange);
@@ -511,7 +513,7 @@
       'COGS': 'Supplier product and shipping COGS',
       'COGS Shopify': 'COGS Shopify',
       'Merchant fees': 'Merchant fees and GST on fees',
-      'Ad spend': 'The five advertising rows'
+      'Ad spend': 'The six advertising rows'
     };
     const notUploaded = SOURCES.filter(src => Object.values(cov[src]).every(v => v.s === 'none'));
     notUploaded.forEach(src => {
@@ -537,5 +539,5 @@
     return issues;
   }
 
-  return { GST_RATE, round2, toNum, parseCSV, isoDate, dateRange, sheetMatrix, aggregateSales, aggregateShopifyCogs, parseMerchantWorkbook, parseCogsWorkbook, compareRecon, buildDaily, countrySummary, productSummary, coverage, validate, SOURCES };
+  return { GST_RATE, AD_PLATFORMS, round2, toNum, parseCSV, isoDate, dateRange, sheetMatrix, aggregateSales, aggregateShopifyCogs, parseMerchantWorkbook, parseCogsWorkbook, compareRecon, buildDaily, countrySummary, productSummary, coverage, validate, SOURCES };
 });

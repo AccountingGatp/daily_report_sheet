@@ -185,7 +185,7 @@
       ['productRevenue', 'Product revenue (ex GST, A$)'], ['shippingAU', 'Shipping revenue (ex GST, A$) - AU'], ['shippingOther', 'Shipping Revenue - Others'], ['refund', 'Refund'], ['refundExGST', 'Refund Ex GST'],
       ['totalRevenue', 'Total revenue (ex GST, A$)'], ['cogsProduct', 'COGS Product Cost Sheet – (A$)'], ['cogsShipping', 'COGS Shipping Cost Sheet – (A$)'], ['cogsShopify', 'COGS Shopify – (A$)'],
       ['grossProfit', 'Gross profit –  COGS (A$)'], ['merchantFees', 'Merchant fees – total (A$)'],
-      ['meta', 'Advertisment Spend - Meta'], ['google', 'Advertisment Spend - Google'], ['pinterest', 'Advertisment Spend - Pinterest'], ['snap', 'Advertisment Spend - Snap'], ['tiktok', 'Advertisment Spend - Tiktok'],
+      ['meta', 'Advertisment Spend - Meta'], ['google', 'Advertisment Spend - Google'], ['pinterest', 'Advertisment Spend - Pinterest'], ['applovin', 'Advertisment Spend - Applovin'], ['snap', 'Advertisment Spend - Snap'], ['tiktok', 'Advertisment Spend - Tiktok'],
       ['adSpend', 'Advertisement spend (A$)'], ['netProfit', 'Net profit as per Suppliers COGS (A$)'], ['profitMargin', 'Profit Margin (as per Supplier COGS (A$))'], ['roas', 'ROAS (Revenue/Ad spend)'], [],
       ['_gst', 'GST Calculation'], ['_out', 'Output'], ['gstSales', 'GST on Sales (incl. GST on refunded sales)'], ['gstShipping', 'GST on Shipping '], ['_in', 'Input'], ['gstFee', 'GST on Fee '], ['gstRefundAU', 'GST on Refund- AU'], [],
       ['netGST', 'Net GST (Output − Input)'], [], ['netProfitAfterGST', 'Net Profit After GST remittance – cash view (Net profit − Net GST)'], [],
@@ -220,7 +220,7 @@
       netProfitAfterGST: c => `${c}${R.netProfit}-${c}${R.netGST}`
     };
     const ratioKeys = new Set(['profitMargin', 'roas']);
-    const AD_KEYS = new Set(['meta', 'google', 'pinterest', 'snap', 'tiktok']);
+    const AD_KEYS = new Set(['meta', 'google', 'pinterest', 'applovin', 'snap', 'tiktok']);
     const fmtFor = k => k === 'profitMargin' ? PCT : k === 'roas' ? '#,##0.00' : k === 'numberOrders' ? '#,##0' : NUM;
 
     // Rows calculated from other rows. They keep their formula even when inputs are blank, wrapped in a

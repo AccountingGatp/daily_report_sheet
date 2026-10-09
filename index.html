@@ -211,7 +211,7 @@ tr.sub td{font-weight:700;background:#f8f9fb}
 
   <!-- 3. Ad spend -->
   <section class="card">
-    <div class="card-h"><div class="num">3</div><div><h2>Advertising spend (A$)</h2><p>Optional. Enter daily spend now (type, paste from a spreadsheet, or import a CSV with Date, Meta, Google, Pinterest, Snap, TikTok) — or leave it blank and fill the ad rows in the Excel file later.</p></div>
+    <div class="card-h"><div class="num">3</div><div><h2>Advertising spend (A$)</h2><p>Optional. Enter daily spend now (type, paste from a spreadsheet, or import a CSV with Date, Meta, Google, Pinterest, Applovin, Snap, TikTok) — or leave it blank and fill the ad rows in the Excel file later.</p></div>
       <div class="right"><button class="btn btn-ghost btn-sm" id="adImportBtn" type="button">Import CSV</button><button class="btn btn-ghost btn-sm" id="adClear" type="button">Clear</button><input id="adImport" type="file" accept=".csv" class="hidden"></div></div>
     <div id="adWrap"><p class="muted small">Set the report period first.</p></div>
   </section>
@@ -330,11 +330,11 @@ tr.sub td{font-weight:700;background:#f8f9fb}
 
     <div class="src-card" id="sop-ads">
       <h4>Advertising spend <span class="fmt">Manual</span></h4>
-      <div class="where"><b>Where:</b> each platform's ads manager — Meta, Google Ads, Pinterest, Snapchat, TikTok — daily spend in A$ for the same dates.</div>
+      <div class="where"><b>Where:</b> each platform's ads manager — Meta, Google Ads, Pinterest, Applovin, Snapchat, TikTok — daily spend in A$ for the same dates.</div>
       <ol>
         <li>Export or read the daily spend per platform.</li>
-        <li>Type it into step 3, paste a block copied from a spreadsheet (Date + five columns, or just the five columns), or import a CSV.</li>
-        <li>Or leave it blank: the five ad rows are left empty (highlighted) in the Daily Reporting sheet, and totals, profit and ROAS update when you type them in Excel.</li>
+        <li>Type it into step 3, paste a block copied from a spreadsheet (Date + six columns, or just the six columns), or import a CSV.</li>
+        <li>Or leave it blank: the six ad rows are left empty (highlighted) in the Daily Reporting sheet, and totals, profit and ROAS update when you type them in Excel.</li>
       </ol>
     </div>
 
@@ -515,7 +515,7 @@ async function routeFiles(list) {
 function flash(t) { const el = $('dropAll'); const old = el.dataset.old || el.textContent; el.dataset.old = old; el.textContent = t; el.style.color = 'var(--err)'; setTimeout(() => { el.textContent = old; el.style.color = ''; }, 5000); }
 
 /* ---------- Period & ad spend ---------- */
-const PLATFORMS = [['meta', 'Meta'], ['google', 'Google'], ['pinterest', 'Pinterest'], ['snap', 'Snap'], ['tiktok', 'TikTok']];
+const PLATFORMS = [['meta', 'Meta'], ['google', 'Google'], ['pinterest', 'Pinterest'], ['applovin', 'Applovin'], ['snap', 'Snap'], ['tiktok', 'TikTok']];
 let adValues = {};  // date → {meta,…}
 function periodDates() { try { return $('from').value && $('to').value ? E.dateRange($('from').value, $('to').value) : null; } catch (e) { return { error: e.message }; } }
 function buildAdGrid() {
@@ -569,7 +569,16 @@ $('adImportBtn').onclick = () => $('adImport').click();
 $('adImport').onchange = async e => {
   const f = e.target.files[0]; if (!f) return;
   const rows = E.parseCSV(await readText(f));
-  rows.forEach(r => { const d = E.isoDate(r.Date ?? r.Day); if (!d) return; const o = adValues[d] ||= {}; PLATFORMS.forEach(([k, label]) => { const key = Object.keys(r).find(x => x.trim().toLowerCase() === label.toLowerCase()); if (key) o[k] = String(E.toNum(r[key])); }); });
+  rows.forEach(r => {
+    const d = E.isoDate(r.Date ?? r.Day);
+    if (!d) return;
+    const o = adValues[d] ||= {};
+    // A column the CSV doesn't have (e.g. an older file with no Applovin) counts as 0 for that date.
+    PLATFORMS.forEach(([k, label]) => {
+      const key = Object.keys(r).find(x => x.trim().toLowerCase() === label.toLowerCase());
+      o[k] = key ? String(E.toNum(r[key])) : '0';
+    });
+  });
   e.target.value = ''; buildAdGrid(); scheduleRecalc();
 };
 $('adClear').onclick = () => { if (confirm('Clear all advertising spend values?')) { adValues = {}; buildAdGrid(); scheduleRecalc(); } };
