@@ -16,6 +16,10 @@
   const GST_RATE = 0.10;
   // Advertising platforms, in report order.
   const AD_PLATFORMS = ['meta', 'google', 'pinterest', 'applovin', 'snap', 'tiktok'];
+  // Processing fee: a flat charge per order. Change the rate here (or pass processingFeeRate).
+  const PROCESSING_FEE_PER_ORDER = 0.63;
+  // How far a single day may sit from that period's own median before it is flagged for review.
+  const TOLERANCE = { cogsShopifyVsSales: 0.35, cogsShopifyVsSupplier: 0.40, merchantVsSales: 0.50 };
   const X = () => XLSXRef || (typeof XLSX !== 'undefined' ? XLSX : null);
 
   // ---------- small helpers ----------
@@ -148,7 +152,7 @@
   function parseMerchantWorkbook(wb, dates) {
     const wanted = new Set(dates);
     const daily = Object.fromEntries(dates.map(d => [d, { exGST: 0, gst: 0, inclGST: 0, platforms: {} }]));
-    const rows = [];
+    const rows = [], duplicates = [];
     for (const s of wb.SheetNames) {
       const m = sheetMatrix(wb.Sheets[s]);
       for (let i = 0; i < m.length; i++) {
@@ -176,8 +180,11 @@
           if (!incl) incl = ex + gst;
           const rec = { date: d, platform, orders: countIdx >= 0 ? toNum(row[countIdx]) : 0, gross: grossIdx >= 0 ? round2(toNum(row[grossIdx])) : 0, exGST: round2(ex), gst: round2(gst), inclGST: round2(incl) };
           const prev = daily[d].platforms[platform];
-          if (prev) { // same platform/date twice → add, don't overwrite
-            ['orders', 'gross', 'exGST', 'gst', 'inclGST'].forEach(k => prev[k] = round2(prev[k] + rec[k]));
+          if (prev) {
+            // The same platform and date appearing twice means the workbook holds that table more than
+            // once (an extra sheet, a repeated block). Adding them would silently inflate the fee, so the
+            // first one is kept and the repeat is reported instead.
+            duplicates.push({ date: d, platform, sheet: s, row: j + 1, kept: prev.exGST, ignored: rec.exGST });
           } else { daily[d].platforms[platform] = rec; rows.push(rec); }
         }
       }
@@ -190,7 +197,7 @@
     });
     const order = { Afterpay: 1, Paypal: 2, Shopify: 3 };
     rows.sort((a, b) => order[a.platform] - order[b.platform] || a.date.localeCompare(b.date));
-    return { daily, rows };
+    return { daily, rows, duplicates };
   }
 
   // ---------- Supplier COGS (Saint COGS output) ----------
@@ -312,6 +319,44 @@
     return { byDate, unpriced };
   }
 
+
+  // ---------- data quality: duplicated rows, rows outside the period ----------
+  const ID_COLS = ['Sale ID', 'Transaction ID'];
+  /** Shopify gives every row a unique Sale/Transaction ID, so a repeat means the file was exported
+   *  twice, appended or merged. Without an ID column the whole row is used as the key. */
+  function duplicateReport(rows, label) {
+    const out = { label, rows: rows ? rows.length : 0, duplicateRows: 0, duplicateKeys: 0, key: 'whole row', samples: [] };
+    if (!rows || !rows.length) return out;
+    const cols = Object.keys(rows[0]);
+    const idCol = ID_COLS.map(c => cols.find(k => norm(k) === norm(c))).find(Boolean);
+    out.key = idCol || 'whole row';
+    const seen = new Map();
+    for (const r of rows) {
+      const k = idCol ? String(r[idCol] ?? '') : cols.map(c => String(r[c] ?? '')).join('\u241F');
+      if (!k) continue;
+      seen.set(k, (seen.get(k) || 0) + 1);
+    }
+    seen.forEach((n, k) => {
+      if (n < 2) return;
+      out.duplicateKeys++;
+      out.duplicateRows += n - 1;
+      if (out.samples.length < 3) out.samples.push(`${idCol ? idCol + ' ' : ''}${k.split('\u241F')[0]} ×${n}`);
+    });
+    return out;
+  }
+  function periodSpread(rows, dates) {
+    const set = new Set(dates);
+    let inside = 0, outside = 0;
+    const others = new Set();
+    for (const r of (rows || [])) {
+      const d = isoDate(pick(r, ['Day', 'Date']));
+      if (!d) continue;
+      if (set.has(d)) inside++; else { outside++; others.add(d); }
+    }
+    const o = [...others].sort();
+    return { inside, outside, firstOutside: o[0] || '', lastOutside: o.at(-1) || '' };
+  }
+
   // ---------- Uploaded Sales reconciliation vs recomputed ----------
   function compareRecon(uploadedRows, salesResult, dates) {
     const out = { checked: 0, diffs: [], datesFound: 0 };
@@ -341,7 +386,7 @@
    * Every source is optional. Anything a missing file would make unreliable is returned as null,
    * never as 0 — so the report can be built from whatever is available without inventing figures.
    */
-  function buildDaily({ from, to, netRows, salesRows, shopifyCogsRows, merchantWb, cogsWb, adSpend = {}, cogsOverrides = {}, reconRows = null }) {
+  function buildDaily({ from, to, netRows, salesRows, shopifyCogsRows, merchantWb, cogsWb, adSpend = {}, cogsOverrides = {}, reconRows = null, processingFeeRate = PROCESSING_FEE_PER_ORDER }) {
     if (!SalesEngine) throw new Error('Sales engine did not load.');
     const dates = dateRange(from, to);
     const has = {
@@ -396,8 +441,11 @@
 
       // --- costs ---
       const cogsProduct = c ? c.productAUD : null, cogsShipping = c ? c.shippingAUD : null;
+      // Flat fee per order, from the order count — so it needs the Total sales file.
+      const processingFee = s ? round2(processingFeeRate * s.orderCount) : null;
       const cogsShopify = shop ? shop.byDate[d] : null;
-      const grossProfit = (totalRevenue == null || cogsProduct == null) ? null : round2(totalRevenue - cogsProduct - cogsShipping);
+      const grossProfit = (totalRevenue == null || cogsProduct == null || processingFee == null) ? null
+        : round2(totalRevenue - cogsProduct - cogsShipping - processingFee);
       const merchantFees = has.merchant ? m.exGST : null;
       const gstFee = has.merchant ? m.gst : null;
 
@@ -414,7 +462,7 @@
         date: d, orderRange: s ? s.orderRange : '', numberOrders: s ? s.orderCount : null,
         gross, discounts, returns, netSales, shipping, roundingTax, totalSales,
         productRevenue, shippingAU, shippingOther, refund, refundExGST, totalRevenue,
-        cogsProduct, cogsShipping, cogsShopify, grossProfit, merchantFees,
+        cogsProduct, cogsShipping, processingFee, cogsShopify, grossProfit, merchantFees,
         meta: adEntered ? ads.meta : null, google: adEntered ? ads.google : null, pinterest: adEntered ? ads.pinterest : null,
         applovin: adEntered ? ads.applovin : null, snap: adEntered ? ads.snap : null, tiktok: adEntered ? ads.tiktok : null,
         adSpend: adTotal, netProfit,
@@ -426,14 +474,19 @@
     // A period total is only shown when every day in the period has a figure.
     const sum = k => rows.some(r => r[k] == null) ? null : round2(rows.reduce((z, r) => z + Number(r[k]), 0));
     const totals = {};
-    ['numberOrders', 'gross', 'discounts', 'returns', 'netSales', 'shipping', 'roundingTax', 'totalSales', 'productRevenue', 'shippingAU', 'shippingOther', 'refund', 'refundExGST', 'totalRevenue', 'cogsProduct', 'cogsShipping', 'cogsShopify', 'grossProfit', 'merchantFees', 'meta', 'google', 'pinterest', 'applovin', 'snap', 'tiktok', 'adSpend', 'netProfit', 'gstSales', 'gstShipping', 'gstFee', 'gstRefundAU', 'netGST', 'netProfitAfterGST'].forEach(k => totals[k] = sum(k));
+    ['numberOrders', 'gross', 'discounts', 'returns', 'netSales', 'shipping', 'roundingTax', 'totalSales', 'productRevenue', 'shippingAU', 'shippingOther', 'refund', 'refundExGST', 'totalRevenue', 'cogsProduct', 'cogsShipping', 'processingFee', 'cogsShopify', 'grossProfit', 'merchantFees', 'meta', 'google', 'pinterest', 'applovin', 'snap', 'tiktok', 'adSpend', 'netProfit', 'gstSales', 'gstShipping', 'gstFee', 'gstRefundAU', 'netGST', 'netProfitAfterGST'].forEach(k => totals[k] = sum(k));
     totals.profitMargin = div(totals.netProfit, totals.totalRevenue);
     totals.roas = div(totals.totalRevenue, totals.adSpend);
     const withRange = rows.filter(r => r.orderRange);
     totals.orderRange = withRange.length ? `${withRange[0].orderRange.split('-')[0]}-${withRange.at(-1).orderRange.split('-')[1]}` : '';
 
     const reconCheck = compareRecon(reconRows, salesResult, dates);
-    return { dates, rows, totals, has, salesResult, salesAgg, merchant, cogs: cogsParsed.byDate, cogsUnpriced: cogsParsed.unpriced, shopCogs: shop ? shop.byDate : {}, shopCogsRows: shop ? shop.rowsByDate : {}, netRowsByDate, reconCheck, reconUploaded: !!(reconRows && reconRows.length), adSpendEntered: rows.some(r => r.adSpend > 0) };
+    const quality = {
+      'Total sales': Object.assign(duplicateReport(salesRows, 'Total sales'), { period: periodSpread(salesRows, dates) }),
+      'Net payments': Object.assign(duplicateReport(netRows, 'Net payments'), { period: periodSpread(netRows, dates) }),
+      'COGS Shopify': Object.assign(duplicateReport(shopifyCogsRows, 'COGS Shopify'), { period: periodSpread(shopifyCogsRows, dates) })
+    };
+    return { dates, rows, totals, has, processingFeeRate, quality, salesResult, salesAgg, merchant, cogs: cogsParsed.byDate, cogsUnpriced: cogsParsed.unpriced, shopCogs: shop ? shop.byDate : {}, shopCogsRows: shop ? shop.rowsByDate : {}, netRowsByDate, reconCheck, reconUploaded: !!(reconRows && reconRows.length), adSpendEntered: rows.some(r => r.adSpend > 0) };
   }
 
   // ---------- Summaries for the workbook ----------
@@ -508,7 +561,7 @@
     const cov = coverage(result);
     const has = result.has || {};
     const BLANKS = {
-      'Total sales': 'Order range, orders, gross sales, discounts, returns, net sales, shipping, rounding, total sales',
+      'Total sales': 'Order range, orders, gross sales, discounts, returns, net sales, shipping, rounding, total sales, processing fee',
       'Net payments': 'Product revenue, shipping revenue, refunds, total revenue and the GST rows',
       'COGS': 'Supplier product and shipping COGS',
       'COGS Shopify': 'COGS Shopify',
@@ -536,8 +589,39 @@
     result.reconCheck.diffs.slice(0, 8).forEach(x => add('REVIEW', 'Sales reconciliation', x.date, `${x.column}: file ${x.uploaded.toFixed(2)} vs recalculated ${x.calculated.toFixed(2)}`));
     if (result.reconCheck.diffs.length > 8) add('REVIEW', 'Sales reconciliation', '', `${result.reconCheck.diffs.length - 8} more differences not shown.`);
     (result.salesResult.audits || []).filter(a => a.severity === 'ERROR').forEach(a => add('ERROR', 'Net payments', a.date, a.message));
+
+    // Duplicated rows — the usual cause of totals coming out too high.
+    Object.values(result.quality || {}).forEach(q => {
+      if (q.duplicateRows) add('REVIEW', q.label, '', `${q.duplicateRows} duplicate row(s) in this file (${q.duplicateKeys} repeated ${q.key === 'whole row' ? 'rows' : q.key + 's'}, e.g. ${q.samples.join(', ')}). The export was probably run twice or two files were merged, which would overstate the totals. Check the file before using this report.`);
+      if (q.period && q.period.outside) add('INFO', q.label, '', `${q.period.outside} row(s) fall outside the report period (${q.period.firstOutside} to ${q.period.lastOutside}) and are ignored.`);
+    });
+
+    // Reasonableness: each day against the period's own median. No fixed amounts — only how far
+    // from that median counts as odd, set by the tolerances below.
+    const median = xs => { const a = xs.filter(v => Number.isFinite(v)).sort((x, y) => x - y); if (!a.length) return 0; const m = a.length >> 1; return a.length % 2 ? a[m] : (a[m - 1] + a[m]) / 2; };
+    const band = (name, source, valueOf, baseOf, asPct, tolerance) => {
+      const pairs = result.rows.map(r => ({ date: r.date, v: valueOf(r), b: baseOf(r) })).filter(x => x.v != null && x.b != null && x.b > 0 && x.v > 0);
+      if (pairs.length < 3) return;
+      const ratios = pairs.map(x => x.v / x.b);
+      const mid = median(ratios);
+      if (!mid) return;
+      pairs.forEach((x, i) => {
+        if (Math.abs(ratios[i] - mid) / mid <= tolerance) return;
+        const f = v => asPct ? `${(v * 100).toFixed(1)}%` : `${v.toFixed(2)}×`;
+        add('REVIEW', source, x.date, `${name} is ${f(ratios[i])} on this date vs ${f(mid)} typical for the period. Check the source file for duplicated rows, a wrong date range or a different report.`);
+      });
+    };
+    band('COGS Shopify as a share of gross sales', 'COGS Shopify', r => r.cogsShopify, r => r.gross, true, TOLERANCE.cogsShopifyVsSales);
+    band('COGS Shopify vs supplier COGS', 'COGS Shopify', r => r.cogsShopify, r => (r.cogsProduct == null ? null : round2(r.cogsProduct + r.cogsShipping)), false, TOLERANCE.cogsShopifyVsSupplier);
+    band('Merchant fees as a share of gross sales', 'Merchant fees', r => r.merchantFees, r => r.gross, true, TOLERANCE.merchantVsSales);
+    const dup = result.merchant.duplicates || [];
+    if (dup.length) {
+      const sheets = [...new Set(dup.map(x => x.sheet))].join(', ');
+      const plats = [...new Set(dup.map(x => x.platform))].join(', ');
+      add('REVIEW', 'Merchant fees', '', `${plats} appears more than once in the workbook (also on sheet "${sheets}", ${dup.length} date(s)). Only the first table was used — adding both would overstate the fee by ${round2(dup.reduce((z, x) => z + x.ignored, 0))}. If the extra table is a different fee type (e.g. a processing fee), it needs its own column headings, or its own row in the report.`);
+    }
     return issues;
   }
 
-  return { GST_RATE, AD_PLATFORMS, round2, toNum, parseCSV, isoDate, dateRange, sheetMatrix, aggregateSales, aggregateShopifyCogs, parseMerchantWorkbook, parseCogsWorkbook, compareRecon, buildDaily, countrySummary, productSummary, coverage, validate, SOURCES };
+  return { GST_RATE, AD_PLATFORMS, PROCESSING_FEE_PER_ORDER, TOLERANCE, round2, toNum, parseCSV, isoDate, dateRange, sheetMatrix, aggregateSales, aggregateShopifyCogs, parseMerchantWorkbook, parseCogsWorkbook, compareRecon, buildDaily, countrySummary, productSummary, coverage, validate, SOURCES };
 });

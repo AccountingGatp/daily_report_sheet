@@ -142,6 +142,7 @@ tr.sub td{font-weight:700;background:#f8f9fb}
 .neg{color:var(--err)}
 .preview td{font-variant-numeric:tabular-nums}
 .preview tr.hl td{font-weight:700;background:#f3f6ff}
+.preview td:last-child,.preview th:last-child{text-align:center;position:sticky;right:0;background:#fff}
 .preview tr.sec td{background:#f8f9fb;color:var(--muted);font-size:11.5px;font-weight:700;text-transform:uppercase;letter-spacing:.4px}
 .dl-row{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-top:16px}
 
@@ -227,7 +228,8 @@ tr.sub td{font-weight:700;background:#f8f9fb}
 
   <!-- 5. Preview & download -->
   <section class="card">
-    <div class="card-h"><div class="num">5</div><div><h2>Preview &amp; download</h2><p>Key rows of the Daily Reporting sheet. The Excel file has the full report with live formulas.</p></div></div>
+    <div class="card-h"><div class="num">5</div><div><h2>Preview &amp; download</h2><p>Key rows of the Daily Reporting sheet. Use <b>Copy</b> to paste a row straight into another sheet — no retyping.</p></div>
+      <div class="right"><button class="btn btn-ghost btn-sm hidden" id="copyAll" type="button">Copy all rows</button></div></div>
     <div id="results"><p class="muted small">The preview appears once a source file is loaded.</p></div>
     <div class="dl-row">
       <button class="btn btn-primary" id="download" type="button" disabled>⬇ Download daily report (.xlsx)</button>
@@ -241,7 +243,7 @@ tr.sub td{font-weight:700;background:#f8f9fb}
 <aside class="drawer" id="drawer" aria-label="Standard operating procedure" aria-hidden="true">
   <div class="drawer-h"><h2>Standard operating procedure</h2><div class="spacer"></div><button class="btn btn-ghost btn-sm" id="closeSop" type="button">Close ✕</button></div>
   <nav class="drawer-nav">
-    <a href="#sop-workflow">Workflow</a><a href="#sop-cogs">COGS</a><a href="#sop-shopcogs">COGS Shopify</a><a href="#sop-merchant">Merchant fees</a><a href="#sop-recon">Sales reconciliation</a><a href="#sop-net">Net payments</a><a href="#sop-sales">Total sales</a><a href="#sop-ads">Ad spend</a><a href="#sop-after">After upload</a><a href="#sop-fix">Fixing gaps</a>
+    <a href="#sop-workflow">Workflow</a><a href="#sop-cogs">COGS</a><a href="#sop-shopcogs">COGS Shopify</a><a href="#sop-merchant">Merchant fees</a><a href="#sop-recon">Sales reconciliation</a><a href="#sop-net">Net payments</a><a href="#sop-sales">Total sales</a><a href="#sop-ads">Ad spend</a><a href="#sop-after">After upload</a><a href="#sop-checks">Checks</a><a href="#sop-fix">Fixing gaps</a>
   </nav>
   <div class="drawer-body sop" id="sopBody">
     <h3 id="sop-workflow">Quick workflow</h3>
@@ -358,6 +360,20 @@ tr.sub td{font-weight:700;background:#f8f9fb}
         </table>
       </li>
     </ol>
+
+    <h3 id="sop-checks">Automatic checks</h3>
+    <p class="muted small">These run on every upload. None of them changes a figure — they only point at files worth a second look.</p>
+    <table>
+      <tr><th>Check</th><th>What it catches</th></tr>
+      <tr><td>Duplicate rows</td><td>Shopify gives every row a unique Sale / Transaction ID. A repeat means the export ran twice or two files were merged, which would double the totals.</td></tr>
+      <tr><td>Rows outside the period</td><td>Counted and ignored, and noted in the report.</td></tr>
+      <tr><td>COGS Shopify vs gross sales</td><td>A day whose COGS share sits well away from the rest of the period — usually a wrong date range or a duplicated day.</td></tr>
+      <tr><td>COGS Shopify vs supplier COGS</td><td>The two normally track each other closely. A day that breaks the pattern is flagged.</td></tr>
+      <tr><td>Merchant fees vs gross sales</td><td>A day where the fee rate is out of line with the period.</td></tr>
+      <tr><td>Repeated fee table</td><td>The same gateway appearing twice in the merchant workbook. The first is used and the repeat reported, so the fee is never silently doubled.</td></tr>
+      <tr><td>Sales reconciliation</td><td>The uploaded file compared value by value with the recalculation from the Shopify CSVs.</td></tr>
+    </table>
+    <p class="tip">Each comparison uses the uploaded period's own figures as the baseline — there are no fixed expected amounts anywhere.</p>
 
     <h3 id="sop-fix">Fixing gaps</h3>
     <table>
@@ -599,7 +615,7 @@ function recalc() {
   if (!ds || ds.error || !loaded.length) {
     setSummary('idle', !ds ? 'Set the report period.' : ds.error ? ds.error : 'Upload at least one source file. Nothing is mandatory — whatever is missing is left blank.');
     $('coverage').innerHTML = ''; $('issues').innerHTML = ''; $('cogsFix').innerHTML = '';
-    $('results').innerHTML = '<p class="muted small">The preview appears once a source file is loaded.</p>';
+    $('results').innerHTML = '<p class="muted small">The preview appears once a source file is loaded.</p>'; $('copyAll').classList.add('hidden');
     $('download').disabled = true; $('dlNote').textContent = 'No file is mandatory — upload what you have.';
     return;
   }
@@ -676,20 +692,42 @@ function renderResults() {
   const R = [
     ['sec', 'Sales'], ['orderRange', 'Order range', 't'], ['numberOrders', 'Number of orders', 'i'], ['gross', 'Gross sales'], ['discounts', 'Discounts'], ['returns', 'Returns'], ['totalSales', 'Total sales', 'hl'],
     ['sec', 'Revenue (ex GST)'], ['productRevenue', 'Product revenue'], ['shippingAU', 'Shipping revenue – AU'], ['shippingOther', 'Shipping revenue – others'], ['refundExGST', 'Refund ex GST'], ['totalRevenue', 'Total revenue', 'hl'],
-    ['sec', 'Costs'], ['cogsProduct', 'COGS product (supplier)'], ['cogsShipping', 'COGS shipping (supplier)'], ['cogsShopify', 'COGS Shopify'], ['grossProfit', 'Gross profit'], ['merchantFees', 'Merchant fees ex GST'], ['adSpend', 'Advertising spend'],
+    ['sec', 'Costs'], ['cogsProduct', 'COGS product (supplier)'], ['cogsShipping', 'COGS shipping (supplier)'], ['processingFee', 'Processing fee (all orders)'], ['cogsShopify', 'COGS Shopify'], ['grossProfit', 'Gross profit'], ['merchantFees', 'Merchant fees ex GST'], ['adSpend', 'Advertising spend'],
     ['sec', 'Profit'], ['netProfit', 'Net profit (supplier COGS)', 'hl'], ['profitMargin', 'Profit margin', 'p'], ['roas', 'ROAS', 'r'],
     ['sec', 'GST'], ['gstSales', 'GST on sales'], ['gstShipping', 'GST on shipping'], ['gstFee', 'GST on fees'], ['gstRefundAU', 'GST on AU refunds'], ['netGST', 'Net GST'], ['netProfitAfterGST', 'Cash after GST remittance (Net profit − Net GST)', 'hl']
   ];
   const cell = (v, t) => v == null || v === '' ? '<span class="muted">—</span>'
     : t === 't' ? esc(v) : t === 'i' ? Number(v).toLocaleString() : t === 'p' ? (v * 100).toFixed(2) + '%'
     : t === 'r' ? v.toFixed(2) : `<span class="${v < 0 ? 'neg' : ''}">${money(v)}</span>`;
-  h += '<div class="tbl-wrap"><table class="preview"><thead><tr><th>Metric</th>' + current.dates.map(d => `<th>${short(d)}</th>`).join('') + '<th>Total</th></tr></thead><tbody>';
+  h += '<div class="tbl-wrap"><table class="preview"><thead><tr><th>Metric</th>' + current.dates.map(d => `<th>${short(d)}</th>`).join('') + '<th>Total</th><th></th></tr></thead><tbody>';
   R.forEach(([k, label, t]) => {
-    if (k === 'sec') { h += `<tr class="sec"><td colspan="${current.dates.length + 2}">${label}</td></tr>`; return; }
-    h += `<tr class="${t === 'hl' ? 'hl' : ''}"><td>${label}</td>` + current.rows.map(r => `<td>${cell(r[k], t)}</td>`).join('') + `<td><b>${cell(T[k], t)}</b></td></tr>`;
+    if (k === 'sec') { h += `<tr class="sec"><td colspan="${current.dates.length + 3}">${label}</td></tr>`; return; }
+    h += `<tr class="${t === 'hl' ? 'hl' : ''}"><td>${label}</td>` + current.rows.map(r => `<td>${cell(r[k], t)}</td>`).join('') +
+      `<td><b>${cell(T[k], t)}</b></td><td><button class="link-btn" type="button" data-copyrow="${k}" title="Copy this row's daily values">Copy</button></td></tr>`;
   });
   h += '</tbody></table></div>';
   $('results').innerHTML = h;
+  $('copyAll').classList.remove('hidden');
+  // Blank stays blank in the clipboard too — an empty cell, never a zero.
+  const rowValues = k => current.rows.map(r => r[k] == null ? '' : k === 'orderRange' ? r[k]
+    : Number(r[k]).toFixed(k === 'numberOrders' ? 0 : k === 'profitMargin' ? 4 : 2));
+  $('results').querySelectorAll('[data-copyrow]').forEach(b => b.onclick = () => copyText(rowValues(b.dataset.copyrow).join('\t'), b));
+  $('copyAll').onclick = () => copyText(R.filter(x => x[0] !== 'sec').map(([k, label]) => [label, ...rowValues(k)].join('\t')).join('\n'), $('copyAll'));
+}
+
+/** Copies text and confirms on the button. Falls back to a hidden textarea where the async
+ *  clipboard API isn't available (e.g. opening the file straight from disk). */
+function copyText(text, btn) {
+  const done = ok => { const old = btn.textContent; btn.textContent = ok ? 'Copied ✓' : 'Press Ctrl+C'; setTimeout(() => btn.textContent = old, 1600); };
+  if (navigator.clipboard && window.isSecureContext) { navigator.clipboard.writeText(text).then(() => done(true), fallback); return; }
+  fallback();
+  function fallback() {
+    const ta = document.createElement('textarea');
+    ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.appendChild(ta); ta.select();
+    let ok = false; try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+    ta.remove(); done(ok);
+  }
 }
 
 /* ---------- Download ---------- */
