@@ -149,9 +149,129 @@
   }
 
   // ---------- Merchant fees (Saint Merchant output) ----------
+  // Fee columns on the "Merchant Fee Total" sheet, in report order.
+  const MF_PLATFORMS = [
+    { platform: 'Afterpay', cols: ['Afterpay (ex GST)', 'Afterpay ex GST', 'Afterpay'] },
+    { platform: 'Paypal', cols: ['Paypal', 'PayPal', 'Paypal (ex GST)', 'PayPal fee'] },
+    { platform: 'Shopify', cols: ['Shopify (ex GST)', 'Shopify ex GST', 'Shopify'] }
+  ];
+
+  /**
+   * The daily-totals sheet written by the Merchant Fee Automation. When it is there it is the only
+   * source for fee amounts — the per-order sheets and pivots in the same workbook repeat the same
+   * figures and must not be added on top. Returns null when the sheet is absent.
+   */
+  function parseMerchantTotalsSheet(wb, dates, wanted) {
+    const sheet = wb.SheetNames.find(n => /merchant\s*fee\s*total/i.test(n));
+    if (!sheet) return null;
+    const m = sheetMatrix(wb.Sheets[sheet]);
+    for (let i = 0; i < m.length; i++) {
+      const hdr = m[i].map(v => String(v ?? ''));
+      const dateIdx = findCol(hdr, ['Date', 'Row Labels']);
+      const totalIdx = findCol(hdr, ['Merchant fee total (ex GST)', 'Merchant fee total ex GST']);
+      if (dateIdx < 0 || totalIdx < 0) continue;
+      const gstIdx = findCol(hdr, ['GST on fees', 'GST on fee']);
+      const inclIdx = findCol(hdr, ['Merchant fee total (incl GST)', 'Merchant fee total incl GST']);
+      const feeIdx = MF_PLATFORMS.map(p => ({ platform: p.platform, idx: findCol(hdr, p.cols) }));
+
+      const daily = Object.fromEntries(dates.map(d => [d, { exGST: 0, gst: 0, inclGST: 0, platforms: {}, hasData: false }]));
+      const rows = [], mismatches = [], seen = new Set();
+      for (let j = i + 1; j < m.length; j++) {
+        const row = m[j];
+        if (!row) continue;
+        if (/grand total/i.test(String(row[dateIdx] ?? ''))) break;
+        const d = inPeriod(row[dateIdx], dates, wanted);
+        if (!d || seen.has(d)) continue;
+        seen.add(d);
+        // Merchant fees are costs: always a positive amount, whatever sign the source used.
+        const fee = idx => idx >= 0 ? Math.abs(round2(toNum(row[idx]))) : 0;
+        const gstTotal = fee(gstIdx);
+        const day = daily[d];
+        day.hasData = true;
+        // The sheet's own total is used as given, but only once it agrees with its three gateway
+        // columns. If it does not — for example the total was built with a negative PayPal fee —
+        // the sum of the gateways wins, since those are unambiguous, and the difference is reported.
+        const parts = round2(feeIdx.reduce((z, x) => z + fee(x.idx), 0));
+        const stated = fee(totalIdx);
+        const exTotal = Math.abs(stated - parts) <= 0.011 ? stated : parts;
+        if (Math.abs(stated - parts) > 0.011) mismatches.push({ date: d, stated, parts });
+        day.exGST = exTotal;
+        day.gst = gstTotal;
+        day.inclGST = inclIdx >= 0 ? fee(inclIdx) : round2(exTotal + gstTotal);
+        // Per-gateway figures for the Fees Calculation sheet. PayPal fees carry no GST, so the GST
+        // the sheet reports is split across the gateways that do, in proportion to their fee.
+        const gstBase = feeIdx.filter(x => x.platform !== 'Paypal').reduce((z, x) => z + fee(x.idx), 0);
+        feeIdx.forEach(({ platform, idx }) => {
+          if (idx < 0) return;
+          const exGST = fee(idx);
+          if (!exGST) return;
+          const gst = platform === 'Paypal' || !gstBase ? 0 : round2(gstTotal * exGST / gstBase);
+          const rec = { date: d, platform, orders: 0, gross: 0, exGST, gst, inclGST: round2(exGST + gst) };
+          day.platforms[platform] = rec;
+          rows.push(rec);
+        });
+      }
+      // Order counts and gross come from the pivot or per-order sheets in the same workbook. They
+      // feed the effective-rate column on the Fees Calculation sheet only, never the fee itself.
+      addGrossAndCounts(wb, daily, dates, wanted, sheet);
+      const order = { Afterpay: 1, Paypal: 2, Shopify: 3 };
+      rows.sort((a, b) => order[a.platform] - order[b.platform] || a.date.localeCompare(b.date));
+      return { daily, rows, duplicates: [], source: sheet, missingDates: dates.filter(d => !seen.has(d)), mismatches };
+    }
+    return null;
+  }
+
+  /** Gross amount and order count per gateway and date, for the effective-rate column only. */
+  function addGrossAndCounts(wb, daily, dates, wanted, skipSheet) {
+    for (const s of wb.SheetNames) {
+      if (s === skipSheet) continue;
+      const m = sheetMatrix(wb.Sheets[s]);
+      for (let i = 0; i < m.length; i++) {
+        const hdr = m[i].map(v => String(v ?? ''));
+        const dateIdx = findCol(hdr, ['Row Labels', 'Date']);
+        if (dateIdx < 0) continue;
+        const grossIdx = findCol(hdr, ['Sum of GrossAmountAUD', 'GrossAmountAUD', 'Gross sales (A$)']);
+        if (grossIdx < 0) continue;
+        const countIdx = findCol(hdr, ['Count of OrderID', 'Number of orders']);
+        const platform = detectMerchantPlatform(hdr);
+        if (!platform) continue;
+        const isPivot = countIdx >= 0;     // a pivot already holds one row per date
+        const acc = {};
+        for (let j = i + 1; j < m.length; j++) {
+          const row = m[j];
+          if (!row) continue;
+          if (/grand total/i.test(String(row[dateIdx] ?? ''))) break;
+          const d = inPeriod(row[dateIdx], dates, wanted);
+          if (!d) continue;
+          const a = acc[d] || (acc[d] = { gross: 0, orders: 0 });
+          a.gross += toNum(row[grossIdx]);
+          a.orders += isPivot ? toNum(row[countIdx]) : 1;
+        }
+        // Gaps only, so the first sheet carrying gross wins and nothing is counted twice.
+        Object.entries(acc).forEach(([d, a]) => {
+          const rec = daily[d] && daily[d].platforms[platform];
+          if (rec && !rec.gross) { rec.gross = round2(a.gross); rec.orders = a.orders; }
+        });
+      }
+    }
+  }
+
+  function detectMerchantPlatform(hdr) {
+    if (findCol(hdr, ['Sum of FeeAmountAUD', 'FeeAmountAUD']) >= 0) return 'Paypal';
+    if (findCol(hdr, ['Sum of MerchantFeeExclGST', 'MerchantFeeExclGST', 'Sum of MerchantFeeInclGST', 'MerchantFeeInclGST']) >= 0) return 'Afterpay';
+    if (findCol(hdr, ['Sum of FeeExGST', 'FeeExGST', 'Sum of FeeInclGST', 'FeeInclGST']) >= 0) return 'Shopify';
+    return '';
+  }
+
   function parseMerchantWorkbook(wb, dates) {
     const wanted = new Set(dates);
-    const daily = Object.fromEntries(dates.map(d => [d, { exGST: 0, gst: 0, inclGST: 0, platforms: {} }]));
+
+    // Preferred: the daily totals sheet from the Merchant Fee Automation.
+    const totals = parseMerchantTotalsSheet(wb, dates, wanted);
+    if (totals) return totals;
+
+    // Fallback for older workbooks that only carry the per-gateway pivots.
+    const daily = Object.fromEntries(dates.map(d => [d, { exGST: 0, gst: 0, inclGST: 0, platforms: {}, hasData: false }]));
     const rows = [], duplicates = [];
     for (const s of wb.SheetNames) {
       const m = sheetMatrix(wb.Sheets[s]);
@@ -175,17 +295,20 @@
           if (/grand total/i.test(String(row[dateIdx] ?? ''))) break;
           const d = inPeriod(row[dateIdx], dates, wanted);
           if (!d) continue;
-          let ex = c.ex >= 0 ? toNum(row[c.ex]) : 0, gst = c.gst >= 0 ? toNum(row[c.gst]) : 0, incl = c.incl >= 0 ? toNum(row[c.incl]) : ex + gst;
+          // Merchant fees are costs: always a positive amount, whatever sign the source used.
+          let ex = c.ex >= 0 ? Math.abs(toNum(row[c.ex])) : 0;
+          const gst = c.gst >= 0 ? Math.abs(toNum(row[c.gst])) : 0;
+          let incl = c.incl >= 0 ? Math.abs(toNum(row[c.incl])) : ex + gst;
           if (!ex && incl) ex = incl - gst;
           if (!incl) incl = ex + gst;
-          const rec = { date: d, platform, orders: countIdx >= 0 ? toNum(row[countIdx]) : 0, gross: grossIdx >= 0 ? round2(toNum(row[grossIdx])) : 0, exGST: round2(ex), gst: round2(gst), inclGST: round2(incl) };
+          const rec = { date: d, platform, orders: countIdx >= 0 ? toNum(row[countIdx]) : 0, gross: grossIdx >= 0 ? Math.abs(round2(toNum(row[grossIdx]))) : 0, exGST: round2(ex), gst: round2(gst), inclGST: round2(incl) };
           const prev = daily[d].platforms[platform];
           if (prev) {
             // The same platform and date appearing twice means the workbook holds that table more than
             // once (an extra sheet, a repeated block). Adding them would silently inflate the fee, so the
             // first one is kept and the repeat is reported instead.
             duplicates.push({ date: d, platform, sheet: s, row: j + 1, kept: prev.exGST, ignored: rec.exGST });
-          } else { daily[d].platforms[platform] = rec; rows.push(rec); }
+          } else { daily[d].platforms[platform] = rec; rows.push(rec); daily[d].hasData = true; }
         }
       }
     }
@@ -197,7 +320,7 @@
     });
     const order = { Afterpay: 1, Paypal: 2, Shopify: 3 };
     rows.sort((a, b) => order[a.platform] - order[b.platform] || a.date.localeCompare(b.date));
-    return { daily, rows, duplicates };
+    return { daily, rows, duplicates, source: '', missingDates: dates.filter(d => !daily[d].hasData), mismatches: [] };
   }
 
   // ---------- Supplier COGS (Saint COGS output) ----------
@@ -402,7 +525,7 @@
 
     const salesAgg = has.sales ? aggregateSales(salesRows, dates) : null;
     const shop = has.shopCogs ? aggregateShopifyCogs(shopifyCogsRows, dates) : null;
-    const merchant = has.merchant ? parseMerchantWorkbook(merchantWb, dates) : { daily: Object.fromEntries(dates.map(d => [d, { exGST: 0, gst: 0, inclGST: 0, platforms: {} }])), rows: [] };
+    const merchant = has.merchant ? parseMerchantWorkbook(merchantWb, dates) : { daily: Object.fromEntries(dates.map(d => [d, { exGST: 0, gst: 0, inclGST: 0, platforms: {}, hasData: false }])), rows: [], duplicates: [], missingDates: [], mismatches: [] };
     const cogsParsed = has.cogs ? parseCogsWorkbook(cogsWb, dates, cogsOverrides) : { byDate: {}, unpriced: [] };
     const salesResult = has.revenue ? SalesEngine.process(netRows, salesRows, null) : Object.assign({ config: SalesEngine.DEFAULT_CONFIG }, EMPTY_SALES_RESULT);
     const recByDate = new Map(salesResult.reconciliationRows.map(r => [r.Date, r]));
@@ -446,8 +569,9 @@
       const cogsShopify = shop ? shop.byDate[d] : null;
       const grossProfit = (totalRevenue == null || cogsProduct == null || processingFee == null) ? null
         : round2(totalRevenue - cogsProduct - cogsShipping - processingFee);
-      const merchantFees = has.merchant ? m.exGST : null;
-      const gstFee = has.merchant ? m.gst : null;
+      // A date the merchant workbook has no row for is left blank, never zero (it is named in the checks).
+      const merchantFees = (has.merchant && m.hasData !== false) ? m.exGST : null;
+      const gstFee = (has.merchant && m.hasData !== false) ? m.gst : null;
 
       // --- advertising: blank until at least one figure is entered for the date ---
       const ads = { meta: toNum(a.meta), google: toNum(a.google), pinterest: toNum(a.pinterest), applovin: toNum(a.applovin), snap: toNum(a.snap), tiktok: toNum(a.tiktok) };
@@ -614,6 +738,10 @@
     band('COGS Shopify as a share of gross sales', 'COGS Shopify', r => r.cogsShopify, r => r.gross, true, TOLERANCE.cogsShopifyVsSales);
     band('COGS Shopify vs supplier COGS', 'COGS Shopify', r => r.cogsShopify, r => (r.cogsProduct == null ? null : round2(r.cogsProduct + r.cogsShipping)), false, TOLERANCE.cogsShopifyVsSupplier);
     band('Merchant fees as a share of gross sales', 'Merchant fees', r => r.merchantFees, r => r.gross, true, TOLERANCE.merchantVsSales);
+    (result.merchant.missingDates || []).length && add('REVIEW', 'Merchant fees', (result.merchant.missingDates || []).join(', '),
+      `No row for this date in the merchant fee workbook${result.merchant.source ? ` ("${result.merchant.source}" sheet)` : ''}. The merchant fee and GST on fees are left blank for these dates.`);
+    (result.merchant.mismatches || []).forEach(x => add('REVIEW', 'Merchant fees', x.date,
+      `The workbook's "Merchant fee total (ex GST)" says ${x.stated.toFixed(2)} but its Afterpay + PayPal + Shopify columns add to ${x.parts.toFixed(2)}. The gateway columns were used. Check the merchant automation — a negative gateway fee is the usual cause.`));
     const dup = result.merchant.duplicates || [];
     if (dup.length) {
       const sheets = [...new Set(dup.map(x => x.sheet))].join(', ');
